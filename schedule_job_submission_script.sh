@@ -3,24 +3,23 @@
 set -euo pipefail
 
 # SLURM parameters
-PARTITION="test"
+PARTITION="large"
 ACCOUNT="lappi"
 NTASKS=1
 CPUS_PER_TASK=8
-TIME="00:15:00"  # HH:MM:SS format
+TIME="23:00:00"  # HH:MM:SS format
 DRYRUN=0  # Set to 1 for dry run mode
 
 # Parameter lists
-#BETA_LIST=(0.2 0.3 0.4 0.5 0.6 0.7 0.8 0.9)
-BETA_LIST=(0.4 0.5)
-Q_LIST=(10.0)
+BETA_LIST=(0.2 0.3 0.4 0.5 0.6 0.7 0.8 0.9)
+Q_LIST=(3.1622776601683795 4.47213595499958 7.0710678118654755 10.0 14.142135623730951 22.360679774997898)
 XMAX_LIST=(40.0)
 
 # Get EXPERIMENT_NAME and SLRM_OUTPUT_DIR from db_info.sh
 source db_info.sh
 
 # Other parameters
-NEVAL=1e6
+NEVAL=1e9
 MEMORY="1G"
 EXEC="photon_T.jl"
 JOB_SCRIPT="submit_job.sh" #The job script takes code name, parameters etc as arguments
