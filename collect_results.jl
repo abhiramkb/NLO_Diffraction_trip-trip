@@ -107,12 +107,13 @@ for filepath in Glob.glob(pattern, experiment_dir)
     if isfile(slurm_out_file)
         for line in eachline(slurm_out_file)
             if occursin("Total iterations * blocks", line)
-		m = match(r"Time:\s*(\d+):(\d{2}):(\d{2})", line)
+		m = match(r"Time:\s*(?:(\d+)\s*days?,\s*)?(\d+):(\d{2}):(\d{2})", line)
 		if m !== nothing
-		    hours = m.captures[1] === nothing ? 0 : parse(Int, m.captures[1])
-                    minutes = parse(Int, m.captures[2])
-                    seconds = parse(Int, m.captures[3])
-                    integrator_time = hours*3600 + minutes*60 + seconds
+		    days    = m.captures[1] === nothing ? 0 : parse(Int, m.captures[1])
+		    hours   = parse(Int, m.captures[2])
+                    minutes = parse(Int, m.captures[3])
+                    seconds = parse(Int, m.captures[4])
+                    integrator_time = days*86400 + hours*3600 + minutes*60 + seconds
                 end
                 break
             end
