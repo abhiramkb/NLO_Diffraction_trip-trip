@@ -17,7 +17,7 @@ if [ ! -d "${save_dir}" ]; then
     mkdir -p "${save_dir}"
 fi
 
-module load julia git
+module load julia/1.11.5 git
 
 export JULIA_NUM_THREADS=$SLURM_CPUS_PER_TASK
 

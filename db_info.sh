@@ -8,6 +8,11 @@ export EXPERIMENT_NAME="struct_fn"
 # SLURM outputs from a given experiment are all kept in a common folder. One can use the job id to identify which result they correspond to.
 export SLRM_OUTPUT_DIR="$RESULT_DATABASE_PATH/$EXPERIMENT_NAME/SLURM_OUTPUT"
 
+# Temporary experiment for debugging
+#export RESULT_DATABASE_PATH="/projappl/lappi/abhiram/trip_database"
+#export EXPERIMENT_NAME="debug"
+#export SLRM_OUTPUT_DIR="$RESULT_DATABASE_PATH/$EXPERIMENT_NAME/SLURM_OUTPUT"
+
 if [ ! -d "${SLRM_OUTPUT_DIR}" ]; then
     mkdir -p "${SLRM_OUTPUT_DIR}"
 fi
