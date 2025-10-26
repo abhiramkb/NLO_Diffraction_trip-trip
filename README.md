@@ -1,0 +1,1 @@
+Code for the NLO trip contribution to the diffractive structure function derived in [Phys. Rev. D 106, 094014](https://journals.aps.org/prd/abstract/10.1103/PhysRevD.106.094014) ([arXiv:2206.13161](https://arxiv.org/abs/2206.13161)). 
