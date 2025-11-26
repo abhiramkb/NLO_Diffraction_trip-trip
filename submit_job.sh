@@ -23,9 +23,9 @@ export JULIA_NUM_THREADS=$SLURM_CPUS_PER_TASK
 
 executable=$1
 
-x=$2
-Q=$3
-beta=$4
+Q=$2
+beta=$3
+x=$4
 xmax=$5
 NEVAL=$6
 Q0=$7
