@@ -134,7 +134,7 @@ function main()
     parsed_args = parse_commandline()
     
     # Input parameters
-    param_keys = ["Q", "beta",, "x", "xmax", "neval", "Q0", "x0", "lambda"]
+    param_keys = ["Q", "beta", "x", "xmax", "neval", "Q0", "x0", "lambda"]
     params = Dict(k => parsed_args[k] for k in param_keys)
 
     # Metadata (where output files are stored etc)
