@@ -79,21 +79,22 @@ function GNLOT(Q, beta, z0, z1, x20, th20, x20b, th20b, x21, th21, x21b, th21b)
     return z0*z1*besselk(1,Q*X012)*besselk(1,Q*X012b)*(1.0/(X012*X012b))*(1.0/Y012)*besselj(1,Mx*Y012)*sum_Y_terms;
 end
 
-function S(a,r)
-    return exp(-a*r^2)
+function S(Q0,x0,lambda,x,r)
+	Qs2 = Q0^2*(x/x0)^-lambda;
+    return exp(-(Qs2*r^2)/4.0)
 end
                     
-function S012(Nc, CF, a, x20, th20, x21, th21)
+function S012(Nc, CF, Q0, x0, lambda, x, x20, th20, x21, th21)
     x10 = sqrt(x20^2 + x21^2 - 2.0*x20*x21*cos(th20 - th21))
-    return S(a,x20)*S(a,x21)
+    return S(Q0, x0, lambda, x, x20)*S(Q0, x0, lambda, x, x21)
 end
                     
 # We set th20 = 0 by using the global rotational symmetry
 
-function integrand(Nc, CF, a, Q, beta, z0, z1, x20, x20b, th20b, x21, th21, x21b, th21b)
+function integrand(Nc, CF, Q0, x0, lambda, x, Q, beta, z0, z1, x20, x20b, th20b, x21, th21, x21b, th21b)
     th20 = 0.0
     measure = x20*x20b*x21*x21b
-    return measure*GNLOT(Q, beta, z0, z1, x20, th20, x20b, th20b, x21, th21, x21b, th21b)*(1.0 - S012(Nc, CF, a, x20, th20, x21, th21))*(1.0 - S012(Nc, CF, a, x20b, th20b, x21b, th21b));
+    return measure*GNLOT(Q, beta, z0, z1, x20, th20, x20b, th20b, x21, th21, x21b, th21b)*(1.0 - S012(Nc, CF, Q0, x0, lambda, x, x20, th20, x21, th21))*(1.0 - S012(Nc, CF, Q0, x0, lambda, x, x20b, th20b, x21b, th21b));
 end
 
 function parse_commandline()
@@ -109,6 +110,10 @@ function parse_commandline()
             help = "beta - DIS variable"
             arg_type = Float64
             required = true
+        "x"
+        	help = "xB - Bjorken-x"
+            arg_type = Float64
+            required = true        	
         "xmax"
             help = "xmax (upper integration bound for |x_ij|)"
             arg_type = Float64
@@ -119,10 +124,18 @@ function parse_commandline()
             help = "Maximum number of points to be used for integration"
             arg_type = Float64
             default = 1e8
-        "--a"
-            help = "Dipole parameter (default = 0.1 - from GBW fit)"
+        "--Q0"
+            help = "GBW parameter: Saturation scale at x = x0"
             arg_type = Float64
-            default = 0.1
+            default = 1.0
+        "--x0"
+            help = "GBW parameter: x0"
+            arg_type = Float64
+            default = 3.04e-4
+        "--lambda"
+            help = "GBW parameter: exponent of (x/x0)"
+            arg_type = Float64
+            default = 0.288
         "--save_dir"
             help = "Saves result to specified folder"
             default = ""
@@ -162,8 +175,11 @@ function main()
 
     Nc = 3.0
     CF = (Nc^2 - 1.0)/(2.0*Nc)
-    a = 0.1 # Parameter for dipole
+    Q0 = 1.0 # Parameter for dipole
+	x0 = 1e-4 # Parameter for dipole
+	lambda = 0.288 # Parameter for dipole
 
+	x = 0.01
     Q = sqrt(3.0)
     beta = 0.5
 
@@ -172,7 +188,7 @@ function main()
     parsed_args = parse_commandline()
     
     # Input parameters
-    param_keys = ["Q", "beta", "xmax", "neval", "a"]
+    param_keys = ["Q", "beta",, "x", "xmax", "neval", "Q0", "x0", "lambda"]
     params = Dict(k => parsed_args[k] for k in param_keys)
 
     # Metadata (where output files are stored etc)
@@ -184,19 +200,25 @@ function main()
     provenance = Dict(k => parsed_args[k] for k in provenance_keys)
 
 
+	x = parsed_args["x"]
     Q = parsed_args["Q"]
     beta = parsed_args["beta"]
     xmax = parsed_args["xmax"]
-    a = parsed_args["a"]
+    Q0 = parsed_args["Q0"]
+    x0 = parsed_args["x0"]
+    lambda = parsed_args["lambda"]
     n_points = Int64(parsed_args["neval"]) # parse as Int
     save_dir = parsed_args["save_dir"]
     json = parsed_args["json"]
 
     println("Parsed args: Q = ",Q)
     println("Parsed args: beta = ",beta)
+	println("Parsed args: x = ",x)
     println("Parsed args: xmax = ",xmax)
     println("Parsed args: n_points = ",n_points)
-    println("Parsed args: a = ",a)
+    println("Parsed args: Q0 = ",Q0)
+	println("Parsed args: x0 = ",x0)
+    println("Parsed args: lambda = ",lambda)
     println("Description: Monte Carlo integral for trip T contribution (large Nc)");
     
     
@@ -208,12 +230,12 @@ function main()
         zmax = (1.0 - z0[1])
         z1 = zmin + (zmax - zmin)*t[1]
         jac = (zmax - zmin)
-        return jac*integrand(Nc, CF, a, Q, beta, z0[1], z1, x20[1], x20b[1], th20b[1], x21[1], th21[1], x21b[1], th21b[1])
+        return jac*integrand(Nc, CF, Q0, x0, lambda, x, Q, beta, z0[1], z1, x20[1], x20b[1], th20b[1], x21[1], th21[1], x21b[1], th21b[1])
     end
 
     res = integrate(f; var = variables, neval=n_points, parallel = :thread)
 
-    result_filename = "result_mcint_neval_"*string(parsed_args["neval"])*"_xmax_"*string(xmax)*"_a_"*string(a)*"_Q_"*string(Q)*"_beta_"*string(beta)*".txt";
+    result_filename = "result_mcint_neval_"*string(parsed_args["neval"])*"_xmax_"*string(xmax)*"_Q0_"*string(Q0)*"_x0_"*string(x0)*"_lambda_"*string(lambda)*"_x_"*string(x)*"_Q_"*string(Q)*"_beta_"*string(beta)*".txt";
     result_path = save_dir*"/"*result_filename;
     json_file_path = save_dir*"/"*json;
 

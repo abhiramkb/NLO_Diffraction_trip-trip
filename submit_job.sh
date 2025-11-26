@@ -23,10 +23,14 @@ export JULIA_NUM_THREADS=$SLURM_CPUS_PER_TASK
 
 executable=$1
 
-Q=$2
-beta=$3
-xmax=$4
-NEVAL=$5
+x=$2
+Q=$3
+beta=$4
+xmax=$5
+NEVAL=$6
+Q0=$7
+x0=$8
+lambda=$9
 
 # Run the task:
 echo "Partition: $SLURM_JOB_PARTITION"
@@ -35,7 +39,7 @@ echo "Number of threads: $SLURM_CPUS_PER_TASK" #Useful to output this for runnin
 starttime=$(date +%s%N)
 echo "Job started at: $(date)"
 
-julia $executable $Q $beta $xmax --neval ${NEVAL} --save_dir $save_dir --json $json
+julia $executable ${x} ${Q} ${beta} ${xmax} --neval ${NEVAL} --Q0 ${Q0} --x0 ${x0} --lambda ${lambda} --save_dir $save_dir --json $json
 
 endtime=$(date +%s%N)
 echo "Job finished at: $(date)"
