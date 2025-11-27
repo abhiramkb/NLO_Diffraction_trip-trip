@@ -39,7 +39,7 @@ echo "Number of threads: $SLURM_CPUS_PER_TASK" #Useful to output this for runnin
 starttime=$(date +%s%N)
 echo "Job started at: $(date)"
 
-julia $executable ${x} ${Q} ${beta} ${xmax} --neval ${NEVAL} --Q0 ${Q0} --x0 ${x0} --lambda ${lambda} --save_dir $save_dir --json $json
+julia $executable ${Q} ${beta} ${x} ${xmax} --neval ${NEVAL} --Q0 ${Q0} --x0 ${x0} --lambda ${lambda} --save_dir $save_dir --json $json
 
 endtime=$(date +%s%N)
 echo "Job finished at: $(date)"

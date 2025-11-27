@@ -46,7 +46,7 @@ for Q0 in "${Q0_LIST[@]}"; do
 					for BETA in "${BETA_LIST[@]}"; do
 						for Q in "${Q_LIST[@]}"; do
 							echo "Submitting job in experiment $EXPERIMENT_NAME with xmax = $XMAX, x=$X, Q=$Q and BETA=$BETA"
-							CMD="sbatch --parsable --partition=$PARTITION --account=$ACCOUNT --ntasks=$NTASKS --cpus-per-task=$CPUS_PER_TASK --mem=$MEMORY --time=$TIME --job-name=\"${EXPERIMENT_NAME}\" --output=\"${SLRM_OUTPUT_DIR}/${EXPERIMENT_NAME}_%j.out\" --error=\"${SLRM_OUTPUT_DIR}/${EXPERIMENT_NAME}_%j.err\" ${JOB_SCRIPT} ${EXEC} $X $Q $BETA $XMAX $NEVAL $Q0 $X0 $LAMBDA"
+							CMD="sbatch --parsable --partition=$PARTITION --account=$ACCOUNT --ntasks=$NTASKS --cpus-per-task=$CPUS_PER_TASK --mem=$MEMORY --time=$TIME --job-name=\"${EXPERIMENT_NAME}\" --output=\"${SLRM_OUTPUT_DIR}/${EXPERIMENT_NAME}_%j.out\" --error=\"${SLRM_OUTPUT_DIR}/${EXPERIMENT_NAME}_%j.err\" ${JOB_SCRIPT} ${EXEC} $Q $BETA $X $XMAX $NEVAL $Q0 $X0 $LAMBDA"
 					
 							if [ "$DRYRUN" -eq 1 ]; then
 							    echo "$CMD"
