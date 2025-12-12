@@ -16,8 +16,13 @@ M_MIN=$(echo "2*$M_PI" | bc -l)
 M_MIN_SQ=$(echo "$M_MIN*$M_MIN" | bc -l)
 XPMAX=0.1
 
+# Parameters for generating beta values for fixed slices in x_Bj
+XPOM_MAX=0.01 #XPOM_MIN will be set to x_Bj
+
 # Parameter lists
-X_LIST=(1e-2)
+XBJ_LIST=(1e-3 1e-4)
+
+XPOM_LIST=(1e-3 1e-4)
 BETA_LIST=()
 Q_LIST=(2.0)
 XMAX_LIST=(40.0)
@@ -48,27 +53,37 @@ for Q0 in "${Q0_LIST[@]}"; do
 	for X0 in "${X0_LIST[@]}"; do
 		for LAMBDA in "${LAMBDA_LIST[@]}"; do
 			for XMAX in "${XMAX_LIST[@]}"; do
-				for X in "${X_LIST[@]}"; do
-					for Q in "${Q_LIST[@]}"; do
-						# Convert scientific-notation X → decimal so bc can read it
-						X_DEC=$(printf "%.15f" "$X")
-						QSQ=$(echo "$Q*$Q" | bc -l)
-
-        					# Compute M_max^2
-						MMAX_SQ=$(echo "$QSQ * ($XPMAX/$X_DEC - 1)" | bc -l)
-
+				for Q in "${Q_LIST[@]}"; do
+					for XBJ in "${XBJ_LIST[@]}"; do
+						XPOM_MIN=XBJ
+						xPvals=()
+						for t in $(seq 0 0.1 1); do
+	    						logxP=$(awk -v xmin="$xPmin" -v xmax="$xPmax" -v t="$t" \
+							    'BEGIN{print log(xmin) + (log(xmax) - log(xmin)) * t}')
+							    xP=$(awk -v v="$logxP" 'BEGIN{print exp(v)}')
+							    xPvals+=("$xP")
+						done
+						
+						# --- Rounding step: xPvals = round.(xPvals .* 1e15) ./ 1e15 ---
+						rounded_xPvals=()
+						for v in "${xPvals[@]}"; do
+						    rounded=$(awk -v x="$v" 'BEGIN{printf "%.15f", (round(x*1e15)/1e15)}')
+						    rounded_xPvals+=("$rounded")
+						done
+						
+						# --- Compute beta_vals = x ./ xPvals ---
 						BETA_LIST=()
-		
-						for i in $(seq 0 0.1 0.2); do
-					        	Msq=$(echo "$M_MIN_SQ + ($MMAX_SQ - $M_MIN_SQ)*$i" | bc -l)
-					        	beta=$(echo "$QSQ / ($QSQ + $Msq)" | bc -l)
-					        	BETA_LIST+=("$beta")    # append to bash array
-					        done
-        					echo
-        					for BETA in "${BETA_LIST[@]}"; do						
-							echo "Submitting job in experiment $EXPERIMENT_NAME with xmax = $XMAX, x=$X, Q=$Q and BETA=$BETA"
-							CMD="sbatch --parsable --partition=$PARTITION --account=$ACCOUNT --ntasks=$NTASKS --cpus-per-task=$CPUS_PER_TASK --mem=$MEMORY --time=$TIME --job-name=\"${EXPERIMENT_NAME}\" --output=\"${SLRM_OUTPUT_DIR}/${EXPERIMENT_NAME}_%j.out\" --error=\"${SLRM_OUTPUT_DIR}/${EXPERIMENT_NAME}_%j.err\" ${JOB_SCRIPT} ${EXEC} $Q $BETA $X $XMAX $NEVAL $Q0 $X0 $LAMBDA"
-					
+						for xp in "${rounded_xPvals[@]}"; do
+						    beta=$(awk -v x="$x" -v xp="$xp" 'BEGIN{print x/xp}')
+						    BETA_LIST+=("$beta")
+						done
+						
+						for BETA in "${BETA_LIST[@]}"; do
+							XPOM=$(awk -v x="$XBJ" -v b="$BETA" 'BEGIN{print x/b}')		
+							
+							echo "Submitting job in experiment $EXPERIMENT_NAME with xmax = $XMAX, x_pom=$XPOM, Q=$Q and BETA=$BETA"
+							CMD="sbatch --parsable --partition=$PARTITION --account=$ACCOUNT --ntasks=$NTASKS --cpus-per-task=$CPUS_PER_TASK --mem=$MEMORY --time=$TIME --job-name=\"${EXPERIMENT_NAME}\" --output=\"${SLRM_OUTPUT_DIR}/${EXPERIMENT_NAME}_%j.out\" --error=\"${SLRM_OUTPUT_DIR}/${EXPERIMENT_NAME}_%j.err\" ${JOB_SCRIPT} ${EXEC} $Q $BETA $XPOM $XMAX $NEVAL $Q0 $X0 $LAMBDA"
+						
 							if [ "$DRYRUN" -eq 1 ]; then
 							    echo "$CMD"
 							else
