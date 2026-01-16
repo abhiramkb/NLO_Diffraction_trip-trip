@@ -57,7 +57,7 @@ function parse_commandline()
             arg_type = Float64
             required = true
         "x"
-        	help = "xB - Bjorken-x"
+            help = "xpom - Pomeron-x"
             arg_type = Float64
             required = true        	
         "xmax"
