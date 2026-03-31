@@ -74,11 +74,26 @@ def GetGridParameters(path_to_file):
     return minr, mult, n, ymin, ymax, yinc
 
 
-def GetGridAtY(path_to_file,Y):
-    interp = ReadBKDipole(path_to_file)
-    minr, mult, n, ymin, ymax, yinc = GetGridParameters(path_to_file)
-    grid = [float(interp((Y,minr*mult**i))) for i in range(200)]
-    return np.array(grid)
+def GetYRgrid(path_to_file):
+    # Returns a 2D numpy grid of dipole values with increasing r(Y) on the  x(y) axis.
+    with open(path_to_file) as f:
+        content = f.read().split("###")
+
+    content = content[1:]
+    content = [i.split() for i in content]
+
+    NrY_data = []
+    pars = []
+
+    for i in content:
+        x = list(map(float, i))
+        if len(x) == 1:
+            pars.append(x)
+        else:
+            NrY_data.append(x)
+
+    NrY_data = np.array(NrY_data)
+    return NrY_data[:,1:]
 
 def GNLOT(Q, beta, z0, z1, x20, th20, x20b, th20b, x21, th21, x21b, th21b):
     """
@@ -87,6 +102,7 @@ def GNLOT(Q, beta, z0, z1, x20, th20, x20b, th20b, x21, th21, x21b, th21b):
     """
     # Precompute some frequently used quantities
     Mx = tf.sqrt(1.0/beta - 1.0) * Q
+    z2 = 1.0 - z0 - z1
 
     # Cosine differences
     cos_th21_m_th20 = tf.cos(th21 - th20)
@@ -95,15 +111,15 @@ def GNLOT(Q, beta, z0, z1, x20, th20, x20b, th20b, x21, th21, x21b, th21b):
     # X012
     X012 = tf.sqrt(
         z0 * z1 * (x21**2 + x20**2 - 2*x21*x20*cos_th21_m_th20) +
-        z0 * (1.0 - z0 - z1) * x20**2 +
-        z1 * (1.0 - z0 - z1) * x21**2
+        z0 * z2 * x20**2 +
+        z1 * z2 * x21**2
     )
 
     # X012b
     X012b = tf.sqrt(
         z0 * z1 * (x21b**2 + x20b**2 - 2*x21b*x20b*cos_th21b_m_th20b) +
-        z0 * (1.0 - z0 - z1) * x20b**2 +
-        z1 * (1.0 - z0 - z1) * x21b**2
+        z0 * z2 * x20b**2 +
+        z1 * z2 * x21b**2
     )
 
     # Cosine differences needed for Y012
@@ -124,12 +140,12 @@ def GNLOT(Q, beta, z0, z1, x20, th20, x20b, th20b, x21, th21, x21b, th21b):
         )
     )
     Y012_part2 = (
-        z0 * (1.0 - z0 - z1) * (
+        z0 * z2 * (
             x20b**2 + x20**2 - 2*x20b*x20*cos_th20b_m_th20
         )
     )
     Y012_part3 = (
-        z1 * (1.0 - z0 - z1) * (
+        z1 * z2 * (
             x21b**2 + x21**2 - 2*x21b*x21*cos_th21b_m_th21
         )
     )
@@ -202,21 +218,21 @@ def GNLOT(Q, beta, z0, z1, x20, th20, x20b, th20b, x21, th21, x21b, th21b):
     )
     Y_c_reg = (z0**2 / (x21**2 * x21b**2)) * (term1c + term2c)
 
-    term1d = (z0**2 * z1**2 * (1.0 - z0 - z1)**2) / (1.0 - z1)**2
+    term1d = (z0**2 * z1**2 * z2**2) / (1.0 - z1)**2
     term2d = -(
-        (z0**2 * z1**3 * (1.0 - z0 - z1)) / (1.0 - z1)
+        (z0**2 * z1**3 * z2) / (1.0 - z1)
     ) * (dot_x20_x0p2c1 / x20**2 + dot_x20b_x0p2c1b / x20b**2)
     term3d = (
-        (z0**2 * z1 * (1.0 - z0 - z1) * (1.0 - z0)**2) / (1.0 - z1)
+        (z0**2 * z1 * z2 * (1.0 - z0)**2) / (1.0 - z1)
     ) * (dot_x21_x0c1p2 / x21**2 + dot_x21b_x0c1p2b / x21b**2)
     Y_d_inst = term1d + term2d + term3d
 
-    term1e = (z0**2 * z1**2 * (1.0 - z0 - z1)**2) / (1.0 - z0)**2
+    term1e = (z0**2 * z1**2 * z2**2) / (1.0 - z0)**2
     term2e = (
-        (z0**3 * z1**2 * (1.0 - z0 - z1)) / (1.0 - z0)
+        (z0**3 * z1**2 * z2) / (1.0 - z0)
     ) * (dot_x21_x0c1p2 / x21**2 + dot_x21b_x0c1p2b / x21b**2)
     term3e = -(
-        (z0 * z1**2 * (1.0 - z0 - z1) * (1.0 - z1)**2) / (1.0 - z0)
+        (z0 * z1**2 * z2 * (1.0 - z1)**2) / (1.0 - z0)
     ) * (dot_x20_x0p2c1 / x20**2 + dot_x20b_x0p2c1b / x20b**2)
     Y_e_inst = term1e + term2e + term3e
 
@@ -225,7 +241,7 @@ def GNLOT(Q, beta, z0, z1, x20, th20, x20b, th20b, x21, th21, x21b, th21b):
         dot_x0c1p2_x0p2c1b * dot_x21_x20b / (x21**2 * x20b**2) +
         dot_x0p2c1_x0c1p2b * dot_x20_x21b / (x20**2 * x21b**2)
     )
-    term2bc_pref = z0 * z1 * (1.0 - z0 - z1) * (z0 - z1)**2
+    term2bc_pref = z0 * z1 * z2 * (z0 - z1)**2
     term2bc_prod1 = (
         (dot_x20_x0p2c1 * dot_x21b_x0c1p2b - dot_x20_x0c1p2b * dot_x21b_x0p2c1) /
         (x20**2 * x21b**2)
@@ -249,20 +265,33 @@ def GNLOT(Q, beta, z0, z1, x20, th20, x20b, th20b, x21, th21, x21b, th21b):
     )
     return result
 
-def S(tfgrid,rmin,rmax, r):
-    value = tfp.math.interp_regular_1d_grid(
-    x=[r], x_ref_min=rmin, x_ref_max=rmax, y_ref=tfgrid, grid_regularizing_transform=tf.math.log)
-    
-    return tf.squeeze(value)
-
-def S012(tfgrid,rmin,rmax, x20, th20, x21, th21):
+def S012(tfgrid, x_ref_min, x_ref_max, Y, x20, th20, x21, th21):
+    #x_ref_min and x_ref_max contain the lower and upper bounds respectively
+    # of the Y-log(r) grid of dipole value. I am using the same notation as in the
+    # documentation for the interpolation function.
+    # x is the array of inputs for the batch interpolation [[Y,log(x20)], [Y,log(x21)], [Y,log(x10)]]
     Nc = 3.0
     CF = 4.0/3.0
+    
     x10 = tf.sqrt(x20**2 + x21**2 - 2.0 * x20 * x21 * tf.cos(th20 - th21))
-    return (Nc / (2.0 * CF)) * (S(tfgrid,rmin,rmax, x20) * S(tfgrid,rmin,rmax, x21) - (1.0 / Nc**2) * S(tfgrid,rmin,rmax, x10))
+
+    # Correct stacking: 
+    # Use axis=-1 to ensure the shape is (batch_size, 2) for each dipole
+    s0 = tf.stack([Y, tf.math.log(x20)], axis=-1)
+    s1 = tf.stack([Y, tf.math.log(x21)], axis=-1)
+    s2 = tf.stack([Y, tf.math.log(x10)], axis=-1)
+
+    # Stack the three dipoles together. Shape: (3, batch_size, 2)
+    x = tf.stack([s0, s1, s2], axis=0)
+    
+    Nvals = tfp.math.batch_interp_regular_nd_grid(x, x_ref_min, x_ref_max, tfgrid, axis=-2, fill_value='constant_extension')
+
+    Svals = 1.0 - Nvals
+    
+    return (Nc / (2.0 * CF)) * (Svals[0] * Svals[1] - (1.0 / Nc**2) * Svals[2])
 
 @tf.function
-def integrand(xx, tfgrid, rmin, rmax, Q=2.0, beta=0.5):
+def integrand(xx, tfgrid, x_ref_min, x_ref_max, Q=2.0, beta=0.5, xpom=0.01):
     # Unpack the tensor
     z0, t, x20, x20b, th20b, x21, th21, x21b, th21b = tf.unstack(xx, axis=-1)
 
@@ -273,22 +302,31 @@ def integrand(xx, tfgrid, rmin, rmax, Q=2.0, beta=0.5):
     z1 = zmin + (zmax - zmin)*t
     jac = (zmax - zmin)
 
+    z2 = 1.0 - z0 - z1
+
+    Qsq=Q**2
+    Q0sq=1.0
+
+    Wsq = Qsq*(1.0/(beta*xpom)-1.0)
+
+    Yqqg = tf.math.log(z2 * (Wsq+Qsq)/Q0sq)
+
     th20 = 0
-    return jac*measure * GNLOT(Q, beta, z0, z1, x20, th20, x20b, th20b, x21, th21, x21b, th21b) * (1.0 - S012(tfgrid,rmin,rmax, x20, th20, x21, th21)) * (1.0 - S012(tfgrid,rmin,rmax, x20b, th20b, x21b, th21b))
+    return jac*measure * GNLOT(Q, beta, z0, z1, x20, th20, x20b, th20b, x21, th21, x21b, th21b) * (1.0 - S012(tfgrid,x_ref_min,x_ref_max, Yqqg, x20, th20, x21, th21)) * (1.0 - S012(tfgrid,x_ref_min,x_ref_max, Yqqg, x20b, th20b, x21b, th21b))
 
 # --- VERIFICATION BLOCK ---
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Trip-trip (T) contribution from dipole grid.")
     parser.add_argument("-Q", type=float, default=3.1622, help="Photon virtuality Q")
     parser.add_argument("--beta", type=float, default=0.5, help="Diffraction variable beta")
+    parser.add_argument("--xpom", type=float, default=0.01, help="Pomeron momentum fraction xpom")
     parser.add_argument("--dipole_path", type=str, required=True, help="Path to the BK table")
-    parser.add_argument("--Y", type=float, default=0.0, help="Rapidity Y")
     parser.add_argument("--events", type=int, default=1000000, help="Number of integration points")
     args = parser.parse_args()
     
     Q=tf.constant(args.Q, dtype=tf.float64)
     beta=tf.constant(args.beta, dtype=tf.float64)
-    Y=args.Y
+    xpom=tf.constant(args.xpom, dtype=tf.float64)
     
     th20=tf.constant(0.0, dtype=tf.float64)
 
@@ -296,9 +334,12 @@ if __name__ == "__main__":
     #Getting grid parameters:
     rmin,mult,n,ymin,ymax,yinc=GetGridParameters(args.dipole_path)
     rmax = rmin*mult**(n-1)
-    # Getting grid at fixed rapidity:
-    grid = GetGridAtY(args.dipole_path,Y)
-    tfgrid = tf.constant(grid)
+    logrmin = np.log(rmin)
+    logrmax = np.log(rmax)
+    x_ref_min = tf.constant(np.array([ymin, logrmin]))
+    x_ref_max = tf.constant(np.array([ymax, logrmax]))
+    
+    tfgrid = GetYRgrid(args.dipole_path)
     
     n_dim = 9
     n_events = args.events
@@ -308,7 +349,7 @@ if __name__ == "__main__":
 
     vegas_instance = VegasFlow(n_dim, n_events, xmin=[0, 0, 0, 0, 0, 0, 0, 0, 0], xmax=[1, 1, xmax, xmax, 2.0*np.pi, xmax, 2.0*np.pi, xmax, 2.0*np.pi])
 
-    integrand_vegasflow = lambda xx: integrand(xx,tfgrid,rmin,rmax,Q=Q,beta=beta)
+    integrand_vegasflow = lambda xx: integrand(xx,tfgrid,x_ref_min,x_ref_max,Q=Q,beta=beta,xpom=xpom)
     
     vegas_instance.compile(integrand_vegasflow)
 

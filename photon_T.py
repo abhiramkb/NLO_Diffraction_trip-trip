@@ -3,6 +3,7 @@ import math
 import numpy as np
 from vegasflow import VegasFlow
 import tensorflow as tf
+import argparse
 
 def GNLOT(Q, beta, z0, z1, x20, th20, x20b, th20b, x21, th21, x21b, th21b):
     """
@@ -199,41 +200,19 @@ def integrand(xx, a=0.1, Q=2.0, beta=0.5):
 
 # --- VERIFICATION BLOCK ---
 if __name__ == "__main__":
-    # Create dummy input: 2 samples, 9 variables each
-    # z0 + z1 must be < 1.0 for physical consistency
-    test_input = tf.constant([
-        [0.2, 0.3, 0.5, 0.6, 0.2, 0.7, 0.3, 0.8, 0.5],
-        [0.2, 0.3, 0.8, 0.9, 0.1, 1.0, 0.5, 0.7, 0.2]
-    ], dtype=tf.float64)
+    parser = argparse.ArgumentParser(description="Trip-trip (T) contribution from dipole grid.")
+    parser.add_argument("-Q", type=float, default=3.1622, help="Photon virtuality Q")
+    parser.add_argument("--beta", type=float, default=0.5, help="Diffraction variable beta")
+    parser.add_argument("--a", type=float, default=0.1, help="Dipole parameter a")
+    parser.add_argument("--events", type=int, default=1000000, help="Number of integration points")
+    args = parser.parse_args()
 
-    a=tf.constant(0.1, dtype=tf.float64)
-    Q=tf.constant(3.16227766016838, dtype=tf.float64)
-    beta=tf.constant(0.5, dtype=tf.float64)
-    th20=tf.constant(0.1, dtype=tf.float64)
-
-    z0, z1, x20, x20b, th20b, x21, th21, x21b, th21b = tf.unstack(test_input, axis=-1)
-
-    output=GNLOT(Q,beta,z0,z1,x20,th20,x20b,th20b,x21,th21,x21b,th21b)
-
-    print("### Verification Output GNLOT ###")
-    print(f"Input Shape:  {test_input.shape}")
-    print(f"Output Shape: {output.shape}")
-    print(f"Results:      {output.numpy()}")
-
-    output = integrand(test_input,Q=Q,beta=beta,a=a)
-
-    print("### Verification Output integrand ###")
-    print(f"Input Shape:  {test_input.shape}")
-    print(f"Output Shape: {output.shape}")
-    print(f"Results:      {output.numpy()}")
-
-    if tf.reduce_any(tf.math.is_nan(output)):
-        print("\nWARNING: Detected NaNs in output. Check physical bounds of inputs.")
-    else:
-        print("\nSuccess: Function produced finite numerical results.")
+    Q=tf.constant(args.Q, dtype=tf.float64)
+    beta=tf.constant(args.beta, dtype=tf.float64)
+    a = tf.constant(args.a, dtype=tf.float64)
 
     n_dim = 9
-    n_events = int(1e7)
+    n_events = args.events
     n_iter = 10
 
     xmax = 40.0
