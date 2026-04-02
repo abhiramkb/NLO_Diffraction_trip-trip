@@ -320,7 +320,7 @@ def integrand(xx, tfgrid, x_ref_min, x_ref_max, Q=2.0, beta=0.5, xpom=0.01):
 # --- VERIFICATION BLOCK ---
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Trip-trip (T) contribution from dipole grid.")
-    parser.add_argument("-Q", type=float, default=3.1622, help="Q - Photon virtuality")
+    parser.add_argument("--Q", type=float, default=3.1622, help="Q - Photon virtuality")
     parser.add_argument("--beta", type=float, default=0.5, help="beta - DIS variable")
     parser.add_argument("--x", type=float, default=0.01, help="xpom - Pomeron-x")
     parser.add_argument("--xmax", type=float, default=40.0, help="xmax (upper integration bound for |x_ij|)")
