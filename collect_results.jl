@@ -22,14 +22,12 @@ db = SQLite.DB(database_path)
 SQLite.execute(db, """
     CREATE TABLE IF NOT EXISTS runs (
         job_id           TEXT PRIMARY KEY,
-        x		 REAL,
+        x		         REAL,
         Q                REAL,
         beta             REAL,
         xmax             REAL,
         neval            INTEGER,
-        Q0               REAL,
-        x0               REAL,
-        lambda           REAL,
+        dipole           TEXT,
         result           REAL,
         error            REAL,
         chi2_dof         REAL,
@@ -40,9 +38,9 @@ SQLite.execute(db, """
         save_dir         TEXT,
         json_file        TEXT,
         duration         REAL,
-	nthreads	 INTEGER,
-	integrator_time	 REAL,
-	partition	 TEXT
+	    nthreads	     INTEGER,
+	    integrator_time	 REAL,
+	    partition	     TEXT
     )
 """)
 
@@ -110,13 +108,21 @@ for filepath in Glob.glob(pattern, experiment_dir)
     if isfile(slurm_out_file)
         for line in eachline(slurm_out_file)
             if occursin("Total iterations * blocks", line)
-		m = match(r"Time:\s*(?:(\d+)\s*days?,\s*)?(\d+):(\d{2}):(\d{2})", line)
-		if m !== nothing
-		    days    = m.captures[1] === nothing ? 0 : parse(Int, m.captures[1])
-		    hours   = parse(Int, m.captures[2])
+        		m = match(r"Time:\s*(?:(\d+)\s*days?,\s*)?(\d+):(\d{2}):(\d{2})", line)
+        		if m !== nothing
+        		    days    = m.captures[1] === nothing ? 0 : parse(Int, m.captures[1])
+            		hours   = parse(Int, m.captures[2])
                     minutes = parse(Int, m.captures[3])
                     seconds = parse(Int, m.captures[4])
                     integrator_time = days*86400 + hours*3600 + minutes*60 + seconds
+                end
+                break
+            elseif occursin("Vegas took: time (s):", line)
+                m = match(r"time \(s\):\s*([0-9]*\.?[0-9]+)", line)
+                if m !== nothing
+                    seconds = parse(Float64, m.captures[1])
+                    seconds = round(Int, seconds)
+                    integrator_time = seconds
                 end
                 break
             end
@@ -130,7 +136,7 @@ for filepath in Glob.glob(pattern, experiment_dir)
                 if m !== nothing
                 	partition = m.captures[1]
             	end
-		break
+            	break
             end
         end
     end
@@ -139,14 +145,13 @@ for filepath in Glob.glob(pattern, experiment_dir)
 
     SQLite.execute(db, """
         INSERT OR IGNORE INTO runs
-        (job_id, x, Q, beta, xmax, neval, Q0, x0, lambda, result, error, chi2_dof,
+        (job_id, x, Q, beta, xmax, neval, dipole, result, error, chi2_dof,
          script_file, git_commit, git_is_dirty, script_is_dirty, save_dir, json_file, duration, nthreads, integrator_time, partition)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
         job_id, params["x"],
-        params["Q"], params["beta"], params["xmax"], params["neval"], params["Q0"],
-        params["x0"], params["lambda"], metrics["result"], metrics["error"], metrics["chi2/dof"],
-        provenance["script_file"], provenance["git_commit"], provenance["git_is_dirty"], provenance["script_is_dirty"],
+        params["Q"], params["beta"], params["xmax"], params["neval"], params["dipole_path"],
+        metrics["result"], metrics["error"], metrics["chi2/dof"], provenance["script_file"], provenance["git_commit"], provenance["git_is_dirty"], provenance["script_is_dirty"],
         meta["save_dir"], meta["json"], duration, nthreads, integrator_time, partition
     ))
 end

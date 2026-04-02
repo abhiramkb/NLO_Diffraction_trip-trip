@@ -18,19 +18,19 @@ if [ ! -d "${save_dir}" ]; then
 fi
 
 module load julia/1.11.5 git
+module load tensorflow
 
 export JULIA_NUM_THREADS=$SLURM_CPUS_PER_TASK
 
-executable=$1
+language=$1
+executable=$2
 
-Q=$2
-beta=$3
-x=$4
-xmax=$5
-NEVAL=$6
-Q0=$7
-x0=$8
-lambda=$9
+Q=$3
+beta=$4
+x=$5
+xmax=$6
+NEVAL=$7
+dipole=$8
 
 # Run the task:
 echo "Partition: $SLURM_JOB_PARTITION"
@@ -39,7 +39,7 @@ echo "Number of threads: $SLURM_CPUS_PER_TASK" #Useful to output this for runnin
 starttime=$(date +%s%N)
 echo "Job started at: $(date)"
 
-julia $executable ${Q} ${beta} ${x} ${xmax} --neval ${NEVAL} --Q0 ${Q0} --x0 ${x0} --lambda ${lambda} --save_dir $save_dir --json $json
+$language $executable ${Q} ${beta} ${x} ${xmax} --neval ${NEVAL} --dipole_path ${dipole} --save_dir $save_dir --json $json
 
 endtime=$(date +%s%N)
 echo "Job finished at: $(date)"
