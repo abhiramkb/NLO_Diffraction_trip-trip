@@ -1,4 +1,7 @@
 import time
+import os
+import subprocess
+import json
 import math
 import numpy as np
 from scipy.interpolate import RegularGridInterpolator
@@ -317,32 +320,93 @@ def integrand(xx, tfgrid, x_ref_min, x_ref_max, Q=2.0, beta=0.5, xpom=0.01):
 # --- VERIFICATION BLOCK ---
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Trip-trip (T) contribution from dipole grid.")
-    parser.add_argument("-Q", type=float, default=3.1622, help="Photon virtuality Q")
-    parser.add_argument("--beta", type=float, default=0.5, help="Diffraction variable beta")
-    parser.add_argument("--xpom", type=float, default=0.01, help="Pomeron momentum fraction xpom")
+    parser.add_argument("-Q", type=float, default=3.1622, help="Q - Photon virtuality")
+    parser.add_argument("--beta", type=float, default=0.5, help="beta - DIS variable")
+    parser.add_argument("--x", type=float, default=0.01, help="xpom - Pomeron-x")
+    parser.add_argument("--xmax", type=float, default=40.0, help="xmax (upper integration bound for |x_ij|)")
     parser.add_argument("--dipole_path", type=str, required=True, help="Path to the BK table")
-    parser.add_argument("--events", type=int, default=1000000, help="Number of integration points")
-    args = parser.parse_args()
+    parser.add_argument("--neval", type=float, default=1e6, help="Number of integration points")
+    parser.add_argument("--save_dir", type=str, default="", help="Saves result to specified folder")
+    parser.add_argument("--json", type=str, default="", help="Provide JSON filename to store input and output to JSON (located in save_dir)")
+    args = vars(parser.parse_args())
+
+    # --- Provenance info ---
+    args["script_file"] = os.path.basename(__file__)
+
+    # Helper function to run shell commands safely
+    def run_cmd(cmd):
+        try:
+            return subprocess.check_output(cmd, shell=True, stderr=subprocess.DEVNULL).decode().strip()
+        except subprocess.CalledProcessError:
+            return None
+
+    # Get Git Commit
+    commit = run_cmd("git rev-parse HEAD")
+    args["git_commit"] = commit if commit else "N/A"
+
+    if commit:
+        # Does the repo have any uncommitted changes?
+        repo_status = run_cmd("git status --porcelain")
+        # Does the specific file have any uncommitted changes?
+        file_path = os.path.abspath(__file__)
+        file_status = run_cmd(f"git status --porcelain -- {file_path}")
+
+        args["git_is_dirty"] = bool(repo_status)
+        args["script_is_dirty"] = bool(file_status)
+    else:
+        args["git_is_dirty"] = "N/A"
+        args["script_is_dirty"] = "N/A"
+
+    Qval = args["Q"]
+    betaval = args["beta"]
+    xpomval = args["x"]
+    xmaxval = args["xmax"]
     
-    Q=tf.constant(args.Q, dtype=tf.float64)
-    beta=tf.constant(args.beta, dtype=tf.float64)
-    xpom=tf.constant(args.xpom, dtype=tf.float64)
+    
+    Q=tf.constant(args["Q"], dtype=tf.float64)
+    beta=tf.constant(args["beta"], dtype=tf.float64)
+    xpom=tf.constant(args["x"], dtype=tf.float64)
+    xmax=tf.constant(args["xmax"], dtype=tf.float64)
+    n_events = int(args["neval"])
+    
+    raw_dipole_path = args["dipole_path"]
+    dipole_path = os.path.abspath(raw_dipole_path) if raw_dipole_path !="" else ""
+    args["dipole_path"] = dipole_path #Updating dict with absolute path
+    raw_save_dir = args["save_dir"]
+    save_dir = os.path.abspath(raw_save_dir) if raw_save_dir !="" else ""
+    args["save_dir"] = save_dir #Updating dict with absolute path
+    json_filename = args["json"]
+
+    print(save_dir)
+
+    # --- Organize data into dictionaries ---
+    # Input parameters
+    param_keys = ["Q", "beta", "x", "xmax", "neval", "dipole_path"]
+    params = {k: args[k] for k in param_keys}
+    
+    # Metadata
+    meta_keys = ["save_dir", "json"]
+    meta = {k: args[k] for k in meta_keys}
+    
+    # Provenance info
+    provenance_keys = ["script_file", "git_commit", "git_is_dirty", "script_is_dirty"]
+    provenance = {k: args[k] for k in provenance_keys}
     
     th20=tf.constant(0.0, dtype=tf.float64)
 
-    interp = ReadBKDipole(args.dipole_path)
+    interp = ReadBKDipole(dipole_path)
     #Getting grid parameters:
-    rmin,mult,n,ymin,ymax,yinc=GetGridParameters(args.dipole_path)
+    rmin,mult,n,ymin,ymax,yinc=GetGridParameters(dipole_path)
     rmax = rmin*mult**(n-1)
     logrmin = np.log(rmin)
     logrmax = np.log(rmax)
     x_ref_min = tf.constant(np.array([ymin, logrmin]))
     x_ref_max = tf.constant(np.array([ymax, logrmax]))
     
-    tfgrid = GetYRgrid(args.dipole_path)
+    tfgrid = GetYRgrid(dipole_path)
     
     n_dim = 9
-    n_events = args.events
+    
     n_iter = 10
 
     xmax = 40.0
@@ -359,5 +423,42 @@ if __name__ == "__main__":
     end = time.time()
     print(f"Result of VEGAS: {result}")
     print(f"Vegas took: time (s): {end-start}")
+
+    # --- Construct file paths ---
+    # Using f-strings for cleaner string concatenation
+    result_filename = (f"result_mcint_neval_{n_events}_xmax_{xmaxval}_x_{xpomval}_Q_{Qval}_beta_{betaval}.txt")
+
+    result_path = os.path.join(save_dir, result_filename)
+    json_file_path = os.path.join(save_dir, json_filename)
+
+    chisqdof=-1.0
+    if save_dir != "":
+        os.makedirs(save_dir, exist_ok=True)
+        with open(result_path, "w") as f:
+            # VegasFlow does not return chisq/dof. Setting it to -1.0.
+            f.write(f"({result[0]}, {result[1]}, {chisqdof})")
+    
+    # --- Save JSON Payload ---
+    if json_filename != "":
+        payload = {
+            "parameters": params,
+            "metrics": {
+                "result": result[0],
+                "error": result[1],
+                "chi2/dof": chisqdof
+            },
+            "provenance": provenance,
+            "meta": meta
+        }
+    
+    # Logic for current directory if save_dir is empty
+    if save_dir != "":
+        target_dir = save_dir 
+        path = os.path.join(target_dir, json_filename)
+        
+        with open(path, "w") as io:
+            json.dump(payload, io, indent=4)
+            
+        print(f"Saved JSON results to {path}")
 
 
