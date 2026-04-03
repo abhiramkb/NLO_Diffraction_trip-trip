@@ -156,6 +156,7 @@ def GNLOL(Q, beta, z0, z1, x20, th20, x20b, th20b, x21, th21, x21b, th21b):
     dot_x20_x21b = x20 * x21b * tf.cos(th20 - th21b)
     dot_x21_x20b = x21 * x20b * tf.cos(th21 - th20b)
 
+    epsilon = 1e-14
 
     # Final result
     result = (
