@@ -123,10 +123,6 @@ def GetYRgrid(path_to_file):
     return NrY_data[:,1:]
 
 def GNLOT(Q, beta, z0, z1, x20, th20, x20b, th20b, x21, th21, x21b, th21b):
-    """
-    TensorFlow version of GNLOT.
-    All inputs are tensors (scalar or batched). Assumes same shape or broadcastable.
-    """
     # Precompute some frequently used quantities
     Mx = tf.sqrt(1.0/beta - 1.0) * Q
     z2 = 1.0 - z0 - z1
@@ -342,7 +338,7 @@ def integrand(xx, tfgrid, x_ref_min, x_ref_max, Q=2.0, beta=0.5, xpom=0.01):
 
     th20 = 0
 
-    return jac*measure*tf.sqrt(alphas(x01)*alphas(x01b))*GLNOT(Q, beta, z0, z1, x20, th20, x20b, th20b, x21, th21, x21b, th21b) * (1.0 - S012(tfgrid,x_ref_min,x_ref_max, Yqqg, x20, th20, x21, th21)) * (1.0 - S012(tfgrid,x_ref_min,x_ref_max, Yqqg, x20b, th20b, x21b, th21b))
+    return jac*measure*tf.sqrt(alphas(x01)*alphas(x01b))*GNLOT(Q, beta, z0, z1, x20, th20, x20b, th20b, x21, th21, x21b, th21b) * (1.0 - S012(tfgrid,x_ref_min,x_ref_max, Yqqg, x20, th20, x21, th21)) * (1.0 - S012(tfgrid,x_ref_min,x_ref_max, Yqqg, x20b, th20b, x21b, th21b))
 
 # --- VERIFICATION BLOCK ---
 if __name__ == "__main__":
