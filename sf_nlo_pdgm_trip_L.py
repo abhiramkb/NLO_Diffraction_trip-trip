@@ -1,3 +1,10 @@
+# Trip contribution to the diffractive structure function at NLO. Code includes all factors except transverse profile integral.
+#
+# Coupling fixed at parent dipole width.
+#
+# Geometric mean prescription for alpha_s: sqrt(alphas(x01)*alphas(x01b))
+#
+# The "pdgm" in the filename stands for Parent dipole, geometric mean alpha_s prescription.
 import time
 import os
 import subprocess
@@ -8,7 +15,24 @@ from scipy.interpolate import RegularGridInterpolator
 from vegasflow import VegasFlow
 import tensorflow as tf
 import tensorflow_probability as tfp
+from tensorflow.experimental import numpy as tnp #Use tnp instead of numpy
 import argparse
+
+def alphas(r):
+    
+    LambdaQCD = 0.241
+    Nc = 3.0
+    Nf = 3.0
+    beta = (11.0*Nc - 2.0*Nf)/3.0
+    Csq = 663.0
+    c = 0.2 # From 2007.01645
+    onebyc = 5.0 
+    mu0 = 2.5*LambdaQCD #From 2007.01645
+    mu0sq = mu0**2
+    LambdaQCDsq = LambdaQCD**2
+    
+    return 4*tnp.pi/(beta*tnp.log(((mu0sq/LambdaQCDsq)**onebyc + (4*Csq/(LambdaQCDsq*r*r))**onebyc)**c))
+
 
 def ReadBKDipole(path_to_file):
     with open(path_to_file) as f:
@@ -98,7 +122,7 @@ def GetYRgrid(path_to_file):
     NrY_data = np.array(NrY_data)
     return NrY_data[:,1:]
 
-def GNLOL(Q, beta, z0, z1, x20, th20, x20b, th20b, x21, th21, x21b, th21b):
+def GLNOL(Q, beta, z0, z1, x20, th20, x20b, th20b, x21, th21, x21b, th21b):
     # Precompute some frequently used quantities
     Mx = tf.sqrt(1.0/beta - 1.0) * Q
     z2 = 1.0 - z0 - z1
@@ -201,8 +225,10 @@ def S012(tfgrid, x_ref_min, x_ref_max, Y, x20, th20, x21, th21):
 
 @tf.function
 def integrand(xx, tfgrid, x_ref_min, x_ref_max, Q=2.0, beta=0.5, xpom=0.01):
-    # Unpack the tensor
     z0, t, x20, x20b, th20b, x21, th21, x21b, th21b = tf.unstack(xx, axis=-1)
+
+    x01 = tf.sqrt(x20**2 + x21**2 - 2.0 * x20 * x21 * tf.cos(th21)) # Note th20 = 0
+    x01b = tf.sqrt(x20b**2 + x21b**2 - 2.0 * x20b * x21b * tf.cos(th20b - th21b))
 
     measure = x20 * x20b * x21 * x21b
 
@@ -221,7 +247,8 @@ def integrand(xx, tfgrid, x_ref_min, x_ref_max, Q=2.0, beta=0.5, xpom=0.01):
     Yqqg = tf.math.log(z2 * (Wsq+Qsq)/Q0sq)
 
     th20 = 0
-    return jac*measure * GNLOL(Q, beta, z0, z1, x20, th20, x20b, th20b, x21, th21, x21b, th21b) * (1.0 - S012(tfgrid,x_ref_min,x_ref_max, Yqqg, x20, th20, x21, th21)) * (1.0 - S012(tfgrid,x_ref_min,x_ref_max, Yqqg, x20b, th20b, x21b, th21b))
+
+    return jac*measure*tf.sqrt(alphas(x01)*alphas(x01b))*GLNOL(Q, beta, z0, z1, x20, th20, x20b, th20b, x21, th21, x21b, th21b) * (1.0 - S012(tfgrid,x_ref_min,x_ref_max, Yqqg, x20, th20, x21, th21)) * (1.0 - S012(tfgrid,x_ref_min,x_ref_max, Yqqg, x20b, th20b, x21b, th21b))
 
 # --- VERIFICATION BLOCK ---
 if __name__ == "__main__":
@@ -285,6 +312,15 @@ if __name__ == "__main__":
 
     print(save_dir)
 
+    # Assemble prefactor
+    Nc = 3.0
+    CF = 4.0/3.0
+    Qval = args["Q"]
+    betaval = args["beta"]
+    sum_ef_squared = 2.0/3.0 # 4/9 + 1/9 + 1/9 = 2/3
+    # Note that prefactor does not contain transverse profile (squared) integral
+    prefactorL = 8*Nc*CF*Qval**7 * math.sqrt(1.0/betaval - 1.0)/((2*np.pi)**7 * betaval) * sum_ef_squared
+
     # --- Organize data into dictionaries ---
     # Input parameters
     param_keys = ["Q", "beta", "x", "xmax", "neval", "dipole_path"]
@@ -326,6 +362,7 @@ if __name__ == "__main__":
     print(f"VEGAS MC, npoints={n_events}:")
     start = time.time()
     result = vegas_instance.run_integration(n_iter)
+    result = [prefactorL*elem for elem in result]
     end = time.time()
     print(f"Result of VEGAS: {result}")
     print(f"Vegas took: time (s): {end-start}")

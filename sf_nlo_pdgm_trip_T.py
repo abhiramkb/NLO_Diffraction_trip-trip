@@ -1,3 +1,10 @@
+# Trip contribution to the diffractive structure function at NLO. Code includes all factors except transverse profile integral.
+#
+# Coupling fixed at parent dipole width.
+#
+# Geometric mean prescription for alpha_s: sqrt(alphas(x01)*alphas(x01b))
+#
+# The "pdgm" in the filename stands for Parent dipole, geometric mean alpha_s prescription.
 import time
 import os
 import subprocess
@@ -8,7 +15,24 @@ from scipy.interpolate import RegularGridInterpolator
 from vegasflow import VegasFlow
 import tensorflow as tf
 import tensorflow_probability as tfp
+from tensorflow.experimental import numpy as tnp #Use tnp instead of numpy
 import argparse
+
+def alphas(r):
+    
+    LambdaQCD = 0.241
+    Nc = 3.0
+    Nf = 3.0
+    beta = (11.0*Nc - 2.0*Nf)/3.0
+    Csq = 663.0
+    c = 0.2 # From 2007.01645
+    onebyc = 5.0 
+    mu0 = 2.5*LambdaQCD #From 2007.01645
+    mu0sq = mu0**2
+    LambdaQCDsq = LambdaQCD**2
+    
+    return 4*tnp.pi/(beta*tnp.log(((mu0sq/LambdaQCDsq)**onebyc + (4*Csq/(LambdaQCDsq*r*r))**onebyc)**c))
+
 
 def ReadBKDipole(path_to_file):
     with open(path_to_file) as f:
@@ -98,7 +122,11 @@ def GetYRgrid(path_to_file):
     NrY_data = np.array(NrY_data)
     return NrY_data[:,1:]
 
-def GNLOL(Q, beta, z0, z1, x20, th20, x20b, th20b, x21, th21, x21b, th21b):
+def GNLOT(Q, beta, z0, z1, x20, th20, x20b, th20b, x21, th21, x21b, th21b):
+    """
+    TensorFlow version of GNLOT.
+    All inputs are tensors (scalar or batched). Assumes same shape or broadcastable.
+    """
     # Precompute some frequently used quantities
     Mx = tf.sqrt(1.0/beta - 1.0) * Q
     z2 = 1.0 - z0 - z1
@@ -155,22 +183,112 @@ def GNLOL(Q, beta, z0, z1, x20, th20, x20b, th20b, x21, th21, x21b, th21b):
     dot_x21_x21b = x21 * x21b * tf.cos(th21 - th21b)
     dot_x20_x21b = x20 * x21b * tf.cos(th20 - th21b)
     dot_x21_x20b = x21 * x20b * tf.cos(th21 - th20b)
+    dot_x20_x21 = x20 * x21 * tf.cos(th20 - th21)
+    dot_x20b_x21b = x20b * x21b * tf.cos(th20b - th21b)
 
-    epsilon = 1e-14
+    # Composite dot products from (29)
+    dot_x20_x0p2c1 = dot_x20_x21 - (z0/(1.0-z1)) * x20**2
+    dot_x20b_x0p2c1b = dot_x20b_x21b - (z0/(1.0-z1)) * x20b**2
+    dot_x20b_x0p2c1 = dot_x21_x20b - (z0/(1.0-z1)) * dot_x20_x20b
+    dot_x20_x0p2c1b = dot_x20_x21b - (z0/(1.0-z1)) * dot_x20_x20b
+    dot_x0p2c1_x0p2c1b = (
+        dot_x21_x21b -
+        (z0/(1.0-z1)) * (dot_x21_x20b + dot_x20_x21b) +
+        (z0**2/(1.0 - z1)**2) * dot_x20_x20b
+    )
+
+    # Composite dot products from (30)
+    dot_x21_x0c1p2 = (z1/(1.0 - z0)) * x21**2 - dot_x20_x21
+    dot_x21_x0c1p2b = (z1/(1.0 - z0)) * dot_x21_x21b - dot_x21_x20b
+    dot_x21b_x0c1p2 = (z1/(1.0 - z0)) * dot_x21_x21b - dot_x20_x21b
+    dot_x21b_x0c1p2b = (z1/(1.0 - z0)) * x21b**2 - dot_x20b_x21b
+    dot_x0c1p2_x0c1p2b = (
+        dot_x20_x20b -
+        (z1/(1.0 - z0)) * (dot_x21_x20b + dot_x20_x21b) +
+        (z1/(1.0 - z0))**2 * dot_x21_x21b
+    )
+
+    # Composite dot products from (33)
+    dot_x0p2c1_x0c1p2b = (
+        (z1/(1.0 - z0)) * dot_x21_x21b - dot_x21_x20b -
+        (z0*z1/((1.0 - z0)*(1.0 - z1))) * dot_x20_x21b +
+        (z0/(1.0 - z1)) * dot_x20_x20b
+    )
+    dot_x0c1p2_x0p2c1b = (
+        (z1/(1.0 - z0)) * dot_x21_x21b - dot_x20_x21b -
+        (z0*z1/((1.0 - z0)*(1.0 - z1))) * dot_x21_x20b +
+        (z0/(1.0 - z1)) * dot_x20_x20b
+    )
+    dot_x20_x0c1p2b = (z1/(1.0 - z0)) * dot_x20_x21b - dot_x20_x20b
+    dot_x21b_x0p2c1 = dot_x21_x21b - (z0/(1.0 - z1)) * dot_x20_x21b
+    dot_x20b_x0c1p2 = (z1/(1.0 - z0)) * dot_x21_x20b - dot_x20_x20b
+    dot_x21_x0p2c1b = dot_x21_x21b - (z0/(1.0 - z1)) * dot_x21_x20b
+
+    # Coefficient functions from Eqs. (29)–(33)
+    term1b = (
+        (z0**2 + (1.0 - z1)**2) * (1.0 - 2*z1*(1.0 - z1)) *
+        dot_x0p2c1_x0p2c1b * dot_x20_x20b
+    )
+    term2b = -(
+        ((1.0 - z1)**2 - z0**2) * (2.0*z1 - 1.0) *
+        (dot_x20_x0p2c1 * dot_x20b_x0p2c1b - dot_x20_x0p2c1b * dot_x20b_x0p2c1)
+    )
+    Y_b_reg = (z1**2 / (x20**2 * x20b**2)) * (term1b + term2b)
+
+    term1c = (
+        (z1**2 + (1.0 - z0)**2) * (1.0 - 2*z0*(1.0 - z0)) *
+        dot_x0c1p2_x0c1p2b * dot_x21_x21b
+    )
+    term2c = -(
+        ((1.0 - z0)**2 - z1**2) * (2.0*z0 - 1.0) *
+        (dot_x21_x0c1p2 * dot_x21b_x0c1p2b - dot_x21_x0c1p2b * dot_x21b_x0c1p2)
+    )
+    Y_c_reg = (z0**2 / (x21**2 * x21b**2)) * (term1c + term2c)
+
+    term1d = (z0**2 * z1**2 * z2**2) / (1.0 - z1)**2
+    term2d = -(
+        (z0**2 * z1**3 * z2) / (1.0 - z1)
+    ) * (dot_x20_x0p2c1 / x20**2 + dot_x20b_x0p2c1b / x20b**2)
+    term3d = (
+        (z0**2 * z1 * z2 * (1.0 - z0)**2) / (1.0 - z1)
+    ) * (dot_x21_x0c1p2 / x21**2 + dot_x21b_x0c1p2b / x21b**2)
+    Y_d_inst = term1d + term2d + term3d
+
+    term1e = (z0**2 * z1**2 * z2**2) / (1.0 - z0)**2
+    term2e = (
+        (z0**3 * z1**2 * z2) / (1.0 - z0)
+    ) * (dot_x21_x0c1p2 / x21**2 + dot_x21b_x0c1p2b / x21b**2)
+    term3e = -(
+        (z0 * z1**2 * z2 * (1.0 - z1)**2) / (1.0 - z0)
+    ) * (dot_x20_x0p2c1 / x20**2 + dot_x20b_x0p2c1b / x20b**2)
+    Y_e_inst = term1e + term2e + term3e
+
+    term1bc_pref = -z0 * z1 * (z0*(1.0 - z1) + z1*(1.0 - z0)) * (z0*(1.0 - z0) + z1*(1.0 - z1))
+    term1bc_prods = (
+        dot_x0c1p2_x0p2c1b * dot_x21_x20b / (x21**2 * x20b**2) +
+        dot_x0p2c1_x0c1p2b * dot_x20_x21b / (x20**2 * x21b**2)
+    )
+    term2bc_pref = z0 * z1 * z2 * (z0 - z1)**2
+    term2bc_prod1 = (
+        (dot_x20_x0p2c1 * dot_x21b_x0c1p2b - dot_x20_x0c1p2b * dot_x21b_x0p2c1) /
+        (x20**2 * x21b**2)
+    )
+    term2bc_prod2 = (
+        (dot_x21_x0c1p2 * dot_x20b_x0p2c1b - dot_x21_x0p2c1b * dot_x20b_x0c1p2) /
+        (x21**2 * x20b**2)
+    )
+    Y_bc_interf = term1bc_pref * term1bc_prods + term2bc_pref * (term2bc_prod1 + term2bc_prod2)
+
+    sum_Y_terms = Y_b_reg + Y_c_reg + Y_d_inst + Y_e_inst + Y_bc_interf
 
     # Final result
     result = (
         z0 * z1 *
-        tf.math.special.bessel_k0(Q * X012) * tf.math.special.bessel_k0(Q * X012b) *(1.0 / Y012) *tf.math.special.bessel_j1(Mx * Y012) *
-            (
-                z1**2*(2.0*z0*(1.0 - z1) + z2**2)*dot_x20_x20b/((x20**2 + epsilon) * (x20b**2 + epsilon))
-              + z0**2*(2.0*z1*(1.0 - z0) + z2**2)*dot_x21_x21b/((x21**2 + epsilon) * (x21b**2 + epsilon))
-              - z0*z1*(z0*(1.0 - z0) + z1*(1.0 - z1))*
-                (
-                    dot_x20_x21b/((x20**2 + epsilon) * (x21b**2 + epsilon))
-                  + dot_x21_x20b/((x21**2 + epsilon) * (x20b**2 + epsilon))
-                )
-            )
+        tf.math.special.bessel_k1(Q * X012) * tf.math.special.bessel_k1(Q * X012b) *
+        (1.0 / (X012 * X012b)) *
+        (1.0 / Y012) *
+        tf.math.special.bessel_j1(Mx * Y012) *
+        sum_Y_terms
     )
     return result
 
@@ -201,8 +319,10 @@ def S012(tfgrid, x_ref_min, x_ref_max, Y, x20, th20, x21, th21):
 
 @tf.function
 def integrand(xx, tfgrid, x_ref_min, x_ref_max, Q=2.0, beta=0.5, xpom=0.01):
-    # Unpack the tensor
     z0, t, x20, x20b, th20b, x21, th21, x21b, th21b = tf.unstack(xx, axis=-1)
+
+    x01 = tf.sqrt(x20**2 + x21**2 - 2.0 * x20 * x21 * tf.cos(th21)) # Note th20 = 0
+    x01b = tf.sqrt(x20b**2 + x21b**2 - 2.0 * x20b * x21b * tf.cos(th20b - th21b))
 
     measure = x20 * x20b * x21 * x21b
 
@@ -221,11 +341,12 @@ def integrand(xx, tfgrid, x_ref_min, x_ref_max, Q=2.0, beta=0.5, xpom=0.01):
     Yqqg = tf.math.log(z2 * (Wsq+Qsq)/Q0sq)
 
     th20 = 0
-    return jac*measure * GNLOL(Q, beta, z0, z1, x20, th20, x20b, th20b, x21, th21, x21b, th21b) * (1.0 - S012(tfgrid,x_ref_min,x_ref_max, Yqqg, x20, th20, x21, th21)) * (1.0 - S012(tfgrid,x_ref_min,x_ref_max, Yqqg, x20b, th20b, x21b, th21b))
+
+    return jac*measure*tf.sqrt(alphas(x01)*alphas(x01b))*GLNOT(Q, beta, z0, z1, x20, th20, x20b, th20b, x21, th21, x21b, th21b) * (1.0 - S012(tfgrid,x_ref_min,x_ref_max, Yqqg, x20, th20, x21, th21)) * (1.0 - S012(tfgrid,x_ref_min,x_ref_max, Yqqg, x20b, th20b, x21b, th21b))
 
 # --- VERIFICATION BLOCK ---
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Trip-trip (L) contribution from dipole grid.")
+    parser = argparse.ArgumentParser(description="Trip-trip (T) contribution from dipole grid.")
     parser.add_argument("--Q", type=float, default=3.1622, help="Q - Photon virtuality")
     parser.add_argument("--beta", type=float, default=0.5, help="beta - DIS variable")
     parser.add_argument("--x", type=float, default=0.01, help="xpom - Pomeron-x")
@@ -285,6 +406,15 @@ if __name__ == "__main__":
 
     print(save_dir)
 
+    # Assemble prefactor
+    Nc = 3.0
+    CF = 4.0/3.0
+    Qval = args["Q"]
+    betaval = args["beta"]
+    sum_ef_squared = 2.0/3.0 # 4/9 + 1/9 + 1/9 = 2/3
+    # Note that prefactor does not contain transverse profile (squared) integral
+    prefactorT = Nc*CF*Qval**7 * math.sqrt(1.0/betaval - 1.0)/((2*np.pi)**5 * betaval*2*np.pi**2) * sum_ef_squared
+
     # --- Organize data into dictionaries ---
     # Input parameters
     param_keys = ["Q", "beta", "x", "xmax", "neval", "dipole_path"]
@@ -326,6 +456,7 @@ if __name__ == "__main__":
     print(f"VEGAS MC, npoints={n_events}:")
     start = time.time()
     result = vegas_instance.run_integration(n_iter)
+    result = [prefactorT*elem for elem in result]
     end = time.time()
     print(f"Result of VEGAS: {result}")
     print(f"Vegas took: time (s): {end-start}")
