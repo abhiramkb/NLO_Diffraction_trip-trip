@@ -204,7 +204,7 @@ if __name__ == "__main__":
     parser.add_argument("-Q", type=float, default=3.1622, help="Photon virtuality Q")
     parser.add_argument("--beta", type=float, default=0.5, help="Diffraction variable beta")
     parser.add_argument("--a", type=float, default=0.1, help="Dipole parameter a")
-    parser.add_argument("--events", type=int, default=1000000, help="Number of integration points")
+    parser.add_argument("--events", type=float, default=1000000, help="Number of integration points")
     args = parser.parse_args()
 
     Q=tf.constant(args.Q, dtype=tf.float64)
@@ -212,7 +212,7 @@ if __name__ == "__main__":
     a = tf.constant(args.a, dtype=tf.float64)
 
     n_dim = 9
-    n_events = args.events
+    n_events = int(args.events)
     n_iter = 10
 
     xmax = 40.0

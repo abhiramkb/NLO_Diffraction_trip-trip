@@ -160,7 +160,7 @@ def GNLOL(Q, beta, z0, z1, x20, th20, x20b, th20b, x21, th21, x21b, th21b):
     )
 
     return res_bessel * kin_factor # Shape: (N, M)
-
+"""
 # --- VECTORIZED S012 ---
 def S012(tfgrid, x_ref_min, x_ref_max, Y, x20, th20, x21, th21):
     # Y is (N, M), coordinates are (N, 1)
@@ -183,6 +183,41 @@ def S012(tfgrid, x_ref_min, x_ref_max, Y, x20, th20, x21, th21):
     Nvals = tfp.math.batch_interp_regular_nd_grid(x, x_ref_min, x_ref_max, tfgrid, axis=-2, fill_value='constant_extension')
     Svals = 1.0 - Nvals
     
+    return (Nc / (2.0 * CF)) * (Svals[0] * Svals[1] - (1.0 / Nc**2) * Svals[2])
+"""
+def S012(tfgrid, x_ref_min, x_ref_max, Y, x20, th20, x21, th21):
+    # Y is (N, M), coordinates are (N, 1)
+    Nc = 3.0
+    CF = 4.0/3.0
+    x10 = tf.sqrt(x20**2 + x21**2 - 2.0 * x20 * x21 * tf.cos(th20 - th21))
+
+    shape_N_M = tf.shape(Y)
+
+  # Broadcast coordinates to (N, M)
+    log_x20 = tf.broadcast_to(tf.math.log(x20), shape_N_M)
+    log_x21 = tf.broadcast_to(tf.math.log(x21), shape_N_M)
+    log_x10 = tf.broadcast_to(tf.math.log(x10), shape_N_M)
+
+    # Stack into (3, N, M, 2)
+    s0 = tf.stack([Y, log_x20], axis=-1)
+    s1 = tf.stack([Y, log_x21], axis=-1)
+    s2 = tf.stack([Y, log_x10], axis=-1)
+    coords = tf.stack([s0, s1, s2], axis=0) # Shape: (3, N, M, 2)
+    # --- THE FIX: FLATTEN ---
+    # Collapse (3, N, M) into a single batch dimension
+    flat_coords = tf.reshape(coords, [-1, 2]) # Shape: (TotalPoints, 2)
+
+    # Interpolate using the flattened coordinates
+    # Because flat_coords is rank-2, tfp won't try to broadcast the grid
+    flat_Nvals = tfp.math.batch_interp_regular_nd_grid(
+        flat_coords, x_ref_min, x_ref_max, tfgrid,  axis=-2,
+        fill_value='constant_extension'
+    )
+
+    # Reshape back to (3, N, M)
+    Nvals = tf.reshape(flat_Nvals, [3, shape_N_M[0], shape_N_M[1]])
+
+    Svals = 1.0 - Nvals
     return (Nc / (2.0 * CF)) * (Svals[0] * Svals[1] - (1.0 / Nc**2) * Svals[2])
 
 # --- VECTORIZED INTEGRAND ---
@@ -325,13 +360,13 @@ if __name__ == "__main__":
     
     n_dim = 9
     
-    n_iter = 100 #Choosing a large niter reduces the size of the tensor operated up in every iteration
+    n_iter = 10 #Choosing a large niter reduces the size of the tensor operated up in every iteration
 
     xmax = 40.0
 
     vegas_instance = VegasFlow(n_dim, n_events, xmin=[0, 0, 0, 0, 0, 0, 0, 0, 0], xmax=[1, 1, xmax, xmax, 2.0*np.pi, xmax, 2.0*np.pi, xmax, 2.0*np.pi])
 
-    beta_list = tf.constant(np.array([0.4,0.45]), dtype=tf.float64)
+    beta_list = tf.constant(np.array([0.4,0.45,0.5]), dtype=tf.float64)
 
     integrand_vegasflow = lambda xx: integrand(xx,tfgrid,x_ref_min,x_ref_max,Q=Q,beta=beta_list,xpom=xpom)
     
