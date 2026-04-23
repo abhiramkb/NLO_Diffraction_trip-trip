@@ -259,6 +259,7 @@ if __name__ == "__main__":
     parser.add_argument("--xmax", type=float, default=40.0, help="xmax (upper integration bound for |x_ij|)")
     parser.add_argument("--dipole_path", type=str, required=True, help="Path to the BK table")
     parser.add_argument("--neval", type=float, default=1e6, help="Number of integration points")
+    parser.add_argument("--input_grid_path", type=str, default="", help="Path to the pre-trained VEGAS grid (if available)")
     parser.add_argument("--save_dir", type=str, default="", help="Saves result to specified folder")
     parser.add_argument("--json", type=str, default="", help="Provide JSON filename to store input and output to JSON (located in save_dir)")
     args = vars(parser.parse_args())
@@ -301,18 +302,22 @@ if __name__ == "__main__":
     xpom=tf.constant(args["x"], dtype=tf.float64)
     xmax=tf.constant(args["xmax"], dtype=tf.float64)
     n_events = int(args["neval"])
-    
+
+    # Processing file paths
     raw_dipole_path = args["dipole_path"]
     dipole_path = os.path.abspath(raw_dipole_path) if raw_dipole_path !="" else ""
     args["dipole_path"] = dipole_path #Updating dict with absolute path
     raw_save_dir = args["save_dir"]
     save_dir = os.path.abspath(raw_save_dir) if raw_save_dir !="" else ""
     args["save_dir"] = save_dir #Updating dict with absolute path
+    raw_input_grid_path = args["input_grid_path"]
+    input_grid_path = os.path.abspath(raw_input_grid_path) if raw_input_grid_path !="" else ""
+    args["input_grid_path"] = input_grid_path
     json_filename = args["json"]
 
     print(save_dir)
 
-    # Assemble prefactor
+    # Assembling prefactor
     Nc = 3.0
     CF = 4.0/3.0
     Qval = args["Q"]
@@ -327,7 +332,7 @@ if __name__ == "__main__":
     params = {k: args[k] for k in param_keys}
     
     # Metadata
-    meta_keys = ["save_dir", "json"]
+    meta_keys = ["save_dir", "json", "input_grid_path"]
     meta = {k: args[k] for k in meta_keys}
     
     # Provenance info
@@ -359,6 +364,10 @@ if __name__ == "__main__":
     
     vegas_instance.compile(integrand_vegasflow)
 
+    # Load pre-trained grid if available
+    if input_grid_path != "":
+        vegas_instance.load_grid(input_grid_path)
+
     print(f"VEGAS MC, npoints={n_events}:")
     start = time.time()
     result = vegas_instance.run_integration(n_iter)
@@ -367,12 +376,17 @@ if __name__ == "__main__":
     print(f"Result of VEGAS: {result}")
     print(f"Vegas took: time (s): {end-start}")
 
+    vegas_instance.freeze_grid()
+    
     # --- Construct file paths ---
     # Using f-strings for cleaner string concatenation
     result_filename = (f"result_mcint_neval_{n_events}_xmax_{xmaxval}_x_{xpomval}_Q_{Qval}_beta_{betaval}.txt")
+    trained_grid_filename = (f"grid_niter_{n_iter}_neval_{n_events}_x_{xpomval}_Q_{Qval}_beta_{beta}.json")
 
     result_path = os.path.join(save_dir, result_filename)
     json_file_path = os.path.join(save_dir, json_filename)
+    trained_grid_path = os.path.join(save_dir, trained_grid_filename)
+    meta["trained_grid"] = trained_grid_filename
 
     chisqdof=-1.0
     if save_dir != "":
@@ -404,4 +418,6 @@ if __name__ == "__main__":
             
         print(f"Saved JSON results to {path}")
 
+    # Dump grid
+    vegas_instance.save_grid(trained_grid_path)
 
