@@ -230,7 +230,7 @@ def integrand(xx, tfgrid, x_ref_min, x_ref_max, Q=2.0, beta=0.1, xpom=0.01):
     # alphas: (N, 1)
     # GNLOL: (N, M)
     # S012 components: (N, M)
-    term1 = jac * measure * alphas(tf.math.minimum(x01,x20,x21))
+    term1 = jac * measure * alphas(tf.math.minimum(x01,tf.math.minimum(x20,x21)))
     term2 = GNLOL(Q, beta_vec, z0, z1, x20, th20, x20b, th20b, x21, th21, x21b, th21b)
     term3 = (1.0 - S012(tfgrid, x_ref_min, x_ref_max, Yqqg, x20, th20, x21, th21))
     term4 = (1.0 - S012(tfgrid, x_ref_min, x_ref_max, Yqqg, x20b, th20b, x21b, th21b))

@@ -398,7 +398,7 @@ if __name__ == "__main__":
     CF = 4.0/3.0
     sum_ef_squared = 2.0/3.0 # 4/9 + 1/9 + 1/9 = 2/3
     # Note that prefactor does not contain transverse profile (squared) integral
-    prefactorsT = Nc*CF*Qval**7 * math.sqrt(1.0/betavals - 1.0)/((2*np.pi)**5 * betavals*2*np.pi**2) * sum_ef_squared
+    prefactorsT = Nc*CF*Qval**7 * np.sqrt(1.0/betavals - 1.0)/((2*np.pi)**5 * betavals*2*np.pi**2) * sum_ef_squared
     
     
     
