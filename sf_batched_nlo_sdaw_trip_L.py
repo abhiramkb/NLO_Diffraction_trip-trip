@@ -22,7 +22,7 @@ def alphas(r):
 
     LambdaQCD = 0.241
     Nc = 3.0
-    Nf = 3.0
+    Nf = 4.0
     beta = (11.0*Nc - 2.0*Nf)/3.0
     Csq = 9.836
     c = 0.2 # From 2007.01645
