@@ -143,6 +143,11 @@ for filepath in Glob.glob(pattern, experiment_dir)
         end
     end
 
+    grid_adaptation_beta_exists = haskey(params,"grid_adaptation_beta")
+    if grid_adaptation_beta_exists != true
+        params["grid_adaptation_beta"] = params["beta"]
+    end
+
 
     SQLite.execute(db, """
         INSERT OR IGNORE INTO runs
