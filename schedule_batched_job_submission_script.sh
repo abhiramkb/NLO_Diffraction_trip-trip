@@ -16,6 +16,8 @@ EXEC="sf_batched_nlo_sdaw_trip_T.py"
 DIPOLE="median_bk.dat"
 PARAM_FILE="betadep_kinematic_points_batched.txt"
 
+XMAX=160.0
+
 source db_info.sh
 JOBID_FILE="$RESULT_DATABASE_PATH/$EXPERIMENT_NAME/submitted_jobs.txt"
 
@@ -35,9 +37,7 @@ submit_batch() {
     XPOMS_STR="${XPOM_BATCH[*]}"
     
     # Define job-specific paths
-    # Note: We use a placeholder since we don't have the JOB_ID yet, 
-    # or we use SLURM's internal variables.
-    JOB_NAME="${EXPERIMENT_NAME}_c${CURRENT_CHUNK_ID}"
+    JOB_NAME="${EXPERIMENT_NAME}"
     
     # This is the actual command string
     # We use --wrap to keep it simple, or a heredoc for complex multi-line logic
@@ -75,10 +75,22 @@ module load julia/1.11.5 git
 module load tensorflow
 export JULIA_NUM_THREADS=\$SLURM_CPUS_PER_TASK
 
+echo "Partition: $SLURM_JOB_PARTITION"
+echo "Number of threads: $SLURM_CPUS_PER_TASK" #Useful to output this for running strong scaling experiments etc
+
+starttime=$(date +%s%N)
+echo "Job started at: $(date)"
+
 # Execution
 python $EXEC --Q $QS_STR --beta $BETAS_STR --x $XPOMS_STR \
-             --xmax 40.0 --neval $NEVAL --dipole_path $DIPOLE \
+             --xmax $XMAX --neval $NEVAL --dipole_path $DIPOLE \
              --save_dir "\${save_dir}" --json "result.json"
+
+endtime=$(date +%s%N)
+echo "Job finished at: $(date)"
+elapsedtime=$((endtime - starttime))
+printf "Job duration: %s.%s seconds\n" "${elapsedtime:0: -9}" "${elapsedtime: -9:3}"
+             
 EOF
 )
         echo "Chunk $CURRENT_CHUNK_ID submitted: $jid"
