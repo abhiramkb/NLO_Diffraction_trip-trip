@@ -44,14 +44,16 @@ submit_batch() {
     if [ "$DRYRUN" -eq 1 ]; then
         echo "------------------------------------------------"
         echo "CHUNK ID: $CURRENT_CHUNK_ID (Size: ${#BETA_BATCH[@]})"
-        echo "QS:    $Q_STR"
+        echo "Q:    $Q_STR"
+        echo "XPOM: $XPOM_STR"
         echo "BETAS: $BETAS_STR"
-        echo "XPOMS: $XPOM_STR"
         echo "WOULD RUN: mkdir, module load, and python $EXEC"
         echo ""
     else
-        # We submit a multi-line script directly to sbatch
-        jid=$(sbatch --parsable <<EOF
+        # 1. Create a descriptive temporary filename using the kinematics
+        SUBMIT_SCRIPT="${SLRM_OUTPUT_DIR}/${JOB_NAME}_Q_${Q_STR}_xpom_${XPOM_STR}_beta_${BETA_BATCH[0]}.sh"
+        # 2. Write the heredoc to this file
+        cat <<EOF > "$SUBMIT_SCRIPT"
 #!/bin/bash
 #SBATCH --partition=$PARTITION
 #SBATCH --account=$ACCOUNT
@@ -82,17 +84,23 @@ starttime=$(date +%s%N)
 echo "Job started at: $(date)"
 
 # Execution
-python $EXEC --Q $QS_STR --beta $BETAS_STR --x $XPOMS_STR \
+python $EXEC --Q $Q_STR --beta $BETAS_STR --x $XPOM_STR \
              --xmax $XMAX --neval $NEVAL --dipole_path $DIPOLE \
              --save_dir "\${save_dir}"
 
 endtime=$(date +%s%N)
 echo "Job finished at: $(date)"
 elapsedtime=$((endtime - starttime))
-printf "Job duration: %s.%s seconds\n" "${elapsedtime:0: -9}" "${elapsedtime: -9:3}"
-             
+printf "Job duration: %s.%s seconds\n" "${elapsedtime:0: -9}" "${elapsedtime: -9:3}"             
 EOF
-)
+
+        # 3. Submit the script to sbatch
+        jid=$(sbatch --parsable "$SUBMIT_SCRIPT")
+
+        # 4. Append the real Slurm Job ID to the end of the filename 
+        #    This preserves the kinematics in the name while linking it to your logs
+        mv "$SUBMIT_SCRIPT" "${SLRM_OUTPUT_DIR}/${JOB_NAME}_Q_${Q_STR}_xpom_${XPOM_STR}_beta_${BETA_BATCH[0]}_${jid}.sh"
+
         echo "Chunk $CURRENT_CHUNK_ID submitted: $jid"
         echo "$jid" >> "$JOBID_FILE"
     fi
