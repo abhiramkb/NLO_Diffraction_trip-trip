@@ -44,9 +44,9 @@ submit_batch() {
     if [ "$DRYRUN" -eq 1 ]; then
         echo "------------------------------------------------"
         echo "CHUNK ID: $CURRENT_CHUNK_ID (Size: ${#BETA_BATCH[@]})"
-        echo "QS:    $QS_STR"
+        echo "QS:    $Q_STR"
         echo "BETAS: $BETAS_STR"
-        echo "XPOMS: $XPOMS_STR"
+        echo "XPOMS: $XPOM_STR"
         echo "WOULD RUN: mkdir, module load, and python $EXEC"
         echo ""
     else
@@ -75,8 +75,8 @@ module load julia/1.11.5 git
 module load tensorflow
 export JULIA_NUM_THREADS=\$SLURM_CPUS_PER_TASK
 
-echo "Partition: $SLURM_JOB_PARTITION"
-echo "Number of threads: $SLURM_CPUS_PER_TASK" #Useful to output this for running strong scaling experiments etc
+echo "Partition: $PARTITION"
+echo "Number of threads: $CPUS_PER_TASK" #Useful to output this for running strong scaling experiments etc
 
 starttime=$(date +%s%N)
 echo "Job started at: $(date)"
