@@ -1,20 +1,20 @@
 #!/bin/bash
 
-DRYRUN=1  
+DRYRUN=0 
 
 # --- Standard Parameters ---
-PARTITION="small"
-#GRES="gpu:v100:1"
+PARTITION="gputest"
+GRES="gpu:v100:1"
 ACCOUNT="lappi"
 NTASKS=1
-CPUS_PER_TASK=16
-TIME="2-12:00:00"
-MEMORY="40G"
+CPUS_PER_TASK=8
+TIME="00:15:00"
+MEMORY="10G"
 NEVAL=1e9
 
 EXEC="sf_batched_nlo_sdaw_trip_T.py"
 DIPOLE="median_bk.dat"
-PARAM_FILE="betadep_kinematic_points_batched.txt"
+PARAM_FILE="test_batched_kinematic_points.txt"
 
 XMAX=160.0
 
@@ -84,7 +84,7 @@ echo "Job started at: $(date)"
 # Execution
 python $EXEC --Q $QS_STR --beta $BETAS_STR --x $XPOMS_STR \
              --xmax $XMAX --neval $NEVAL --dipole_path $DIPOLE \
-             --save_dir "\${save_dir}" --json "result.json"
+             --save_dir "\${save_dir}"
 
 endtime=$(date +%s%N)
 echo "Job finished at: $(date)"
