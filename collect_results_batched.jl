@@ -152,13 +152,13 @@ for filepath in Glob.glob(pattern, experiment_dir)
     SQLite.execute(db, """
         INSERT OR IGNORE INTO runs
         (job_id, batched, grid_adaptation_beta, x, Q, beta, xmax, neval, dipole, result, error, chi2_dof,
-         script_file, git_commit, git_is_dirty, script_is_dirty, save_dir, json_file, duration, nthreads, integrator_time, partition)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         script_file, git_commit, git_is_dirty, script_is_dirty, save_dir, input_grid_path, trained_grid, duration, nthreads, integrator_time, partition)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
         job_id, params["batched"], params["grid_adaptation_beta"], params["x"],
         params["Q"], params["beta"], params["xmax"], params["neval"], params["dipole_path"],
         metrics["result"], metrics["error"], metrics["chi2/dof"], provenance["script_file"], provenance["git_commit"], provenance["git_is_dirty"], provenance["script_is_dirty"],
-        meta["save_dir"], meta["json"], duration, nthreads, integrator_time, partition
+        meta["save_dir"], meta["input_grid_path"], meta["trained_grid"], duration, nthreads, integrator_time, partition
     ))
 end
 
