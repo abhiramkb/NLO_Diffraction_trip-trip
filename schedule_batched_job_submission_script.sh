@@ -32,9 +32,9 @@ XPOM_BATCH=()
 submit_batch() {
     if [ ${#BETA_BATCH[@]} -eq 0 ]; then return; fi
     
-    QS_STR="${Q_BATCH[*]}"
+    Q_STR="${Q_BATCH[0]}"
     BETAS_STR="${BETA_BATCH[*]}"
-    XPOMS_STR="${XPOM_BATCH[*]}"
+    XPOM_STR="${XPOM_BATCH[0]}"
     
     # Define job-specific paths
     JOB_NAME="${EXPERIMENT_NAME}"
