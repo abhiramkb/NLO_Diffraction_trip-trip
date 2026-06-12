@@ -47,7 +47,7 @@ SQLite.execute(db, """
 """)
 
 
-pattern = "*/result.json"
+pattern = "*/result_*.json"
 experiment_dir = joinpath(base_path, experiment)
 slurm_output_dir = joinpath(base_path, experiment, "SLURM_OUTPUT")
 
