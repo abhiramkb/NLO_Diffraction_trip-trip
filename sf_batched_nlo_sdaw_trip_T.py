@@ -419,7 +419,7 @@ if __name__ == "__main__":
     
     n_iter = 10
 
-    main_dimension = 0
+    main_dimension = 0 #main dimension not provided as argument. Supply beta value for main dimension first
 
     vegas_instance = VegasFlow(n_dim, n_events, xmin=[0, 0, 0, 0, 0, 0, 0, 0, 0], xmax=[1, 1, xmax, xmax, 2.0*np.pi, xmax, 2.0*np.pi, xmax, 2.0*np.pi],main_dimension = main_dimension)
 
@@ -449,9 +449,10 @@ if __name__ == "__main__":
         params["beta"] = beta
 
         params["batched"] = False
+        params["grid_adaptation_beta"] = betavals[main_dimension]
+        
         if len(betavals) > 1:
             params["batched"] = True
-            params["grid_adaptation_beta"] = betavals[main_dimension]
             
         
         # Metadata
