@@ -20,18 +20,23 @@ import argparse
 
 def alphas(r):
 
-    LambdaQCD = 0.241
-    Nc = 3.0
-    Nf = 4.0
+    dtype = tf.float64
+    LambdaQCD = tf.constant(0.241, dtype = dtype)
+    Nc = tf.constant(3.0, dtype = dtype)
+    Nf = tf.constant(4.0, dtype = dtype)
     beta = (11.0*Nc - 2.0*Nf)/3.0
-    Csq = 9.836
-    c = 0.2 # From 2007.01645
-    onebyc = 5.0 
+    Csq = tf.constant(9.836, dtype = dtype)
+    c = tf.constant(0.2, dtype = dtype) # From 2007.01645
+    onebyc = tf.constant(5.0, dtype = dtype) 
     mu0 = 2.5*LambdaQCD #From 2007.01645
     mu0sq = mu0**2
     LambdaQCDsq = LambdaQCD**2
+
+    r_cutoff = (2.0*tf.sqrt(Csq)/LambdaQCD)*tnp.exp(-60.0*tnp.pi/(7.0*(33-2.0*Nf)));
+
+    rval = r_cutoff if r>r_cutoff else r
     
-    return 12*tnp.pi/((33.0 - 2.0*Nf)*tnp.log(4*Csq/(LambdaQCDsq*r*r)))
+    return 12*tnp.pi/((33.0 - 2.0*Nf)*tnp.log(4*Csq/(LambdaQCDsq*rval*rval)))
 
 def ReadBKDipole(path_to_file):
     with open(path_to_file) as f:
