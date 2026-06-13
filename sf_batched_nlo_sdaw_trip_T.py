@@ -31,7 +31,7 @@ def alphas(r):
     mu0sq = mu0**2
     LambdaQCDsq = LambdaQCD**2
     
-    return 4*tnp.pi/(beta*tnp.log(((mu0sq/LambdaQCDsq)**onebyc + (4*Csq/(LambdaQCDsq*r*r))**onebyc)**c))
+    return 12*tnp.pi/((33.0 - 2.0*Nf)*tnp.log(4*Csq/(LambdaQCDsq*r*r)))
 
 def ReadBKDipole(path_to_file):
     with open(path_to_file) as f:
