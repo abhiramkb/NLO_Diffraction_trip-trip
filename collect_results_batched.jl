@@ -21,7 +21,7 @@ db = SQLite.DB(database_path)
 # Create the table if it does not exist
 SQLite.execute(db, """
     CREATE TABLE IF NOT EXISTS runs (
-        job_id           TEXT PRIMARY KEY,
+        job_id           TEXT,
         batched		     BOOLEAN,
         grid_adaptation_beta        REAL,
         x		         REAL,
@@ -43,7 +43,9 @@ SQLite.execute(db, """
         duration         REAL,
 	    nthreads	     INTEGER,
 	    integrator_time	 REAL,
-	    partition	     TEXT
+	    partition	     TEXT,
+
+	    PRIMARY KEY (job_id, beta)
     )
 """)
 

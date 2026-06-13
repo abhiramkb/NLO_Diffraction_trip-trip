@@ -3,18 +3,18 @@
 DRYRUN=0 
 
 # --- Standard Parameters ---
-PARTITION="gputest"
+PARTITION="gpu"
 GRES="gpu:v100:1"
 ACCOUNT="lappi"
 NTASKS=1
 CPUS_PER_TASK=8
-TIME="00:15:00"
+TIME="02:00:00"
 MEMORY="10G"
 NEVAL=1e9
 
-EXEC="sf_batched_nlo_sdaw_trip_T.py"
+EXEC="sf_batched_nlo_sdaw_trip_L.py"
 DIPOLE="median_bk.dat"
-PARAM_FILE="test_batched_kinematic_points.txt"
+PARAM_FILE="betadep_kinematic_points_batched.txt"
 
 XMAX=160.0
 
@@ -80,18 +80,18 @@ export JULIA_NUM_THREADS=\$SLURM_CPUS_PER_TASK
 echo "Partition: $PARTITION"
 echo "Number of threads: $CPUS_PER_TASK" #Useful to output this for running strong scaling experiments etc
 
-starttime=$(date +%s%N)
-echo "Job started at: $(date)"
+starttime=\$(date +%s)
+echo "Job started at: \$(date)"
 
 # Execution
 python $EXEC --Q $Q_STR --beta $BETAS_STR --x $XPOM_STR \
              --xmax $XMAX --neval $NEVAL --dipole_path $DIPOLE \
              --save_dir "\${save_dir}"
 
-endtime=$(date +%s%N)
-echo "Job finished at: $(date)"
-elapsedtime=$((endtime - starttime))
-printf "Job duration: %s.%s seconds\n" "${elapsedtime:0: -9}" "${elapsedtime: -9:3}"             
+endtime=\$(date +%s)
+echo "Job finished at: \$(date)"
+elapsedtime=\$((endtime - starttime))
+echo "Job duration: \${elapsedtime} seconds"
 EOF
 
         # 3. Submit the script to sbatch
@@ -99,7 +99,7 @@ EOF
 
         # 4. Append the real Slurm Job ID to the end of the filename 
         #    This preserves the kinematics in the name while linking it to your logs
-        mv "$SUBMIT_SCRIPT" "${SLRM_OUTPUT_DIR}/${JOB_NAME}_Q_${Q_STR}_xpom_${XPOM_STR}_beta_${BETA_BATCH[0]}_${jid}.sh"
+        mv "$SUBMIT_SCRIPT" "${SLRM_OUTPUT_DIR}/jobscript_${jid}.sh"
 
         echo "Chunk $CURRENT_CHUNK_ID submitted: $jid"
         echo "$jid" >> "$JOBID_FILE"
