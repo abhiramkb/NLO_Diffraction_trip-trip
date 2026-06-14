@@ -26,9 +26,10 @@ def alphas(r):
     Csq = 9.836
     LambdaQCDsq = LambdaQCD**2
 
-    r_cutoff = (2.0*tf.sqrt(Csq)/LambdaQCD)*tnp.exp(-60.0*tnp.pi/(7.0*(33-2.0*Nf)));
+    r_cutoff_val = (2.0*tnp.sqrt(Csq)/LambdaQCD)*tnp.exp(-60.0*tnp.pi/(7.0*(33-2.0*Nf)));
+    r_cutoff = tf.constant(r_cutoff_val, dtype=tf.float64)
 
-    rval = r_cutoff if r>r_cutoff else r
+    rval = tf.minimum(r, r_cutoff)
     
     return 12*tnp.pi/((33.0 - 2.0*Nf)*tnp.log(4*Csq/(LambdaQCDsq*rval*rval)))
     
