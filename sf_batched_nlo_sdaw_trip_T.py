@@ -19,17 +19,11 @@ from tensorflow.experimental import numpy as tnp #Use tnp instead of numpy
 import argparse
 
 def alphas(r):
-
-    dtype = tf.float64
-    LambdaQCD = tf.constant(0.241, dtype = dtype)
-    Nc = tf.constant(3.0, dtype = dtype)
-    Nf = tf.constant(4.0, dtype = dtype)
+    LambdaQCD = 0.241
+    Nc = 3.0
+    Nf = 4.0
     beta = (11.0*Nc - 2.0*Nf)/3.0
-    Csq = tf.constant(9.836, dtype = dtype)
-    c = tf.constant(0.2, dtype = dtype) # From 2007.01645
-    onebyc = tf.constant(5.0, dtype = dtype) 
-    mu0 = 2.5*LambdaQCD #From 2007.01645
-    mu0sq = mu0**2
+    Csq = 9.836
     LambdaQCDsq = LambdaQCD**2
 
     r_cutoff = (2.0*tf.sqrt(Csq)/LambdaQCD)*tnp.exp(-60.0*tnp.pi/(7.0*(33-2.0*Nf)));
