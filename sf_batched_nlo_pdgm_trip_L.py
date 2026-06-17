@@ -397,8 +397,8 @@ if __name__ == "__main__":
             payload = {
                 "parameters": params,
                 "metrics": {
-                    "result": result[0][n],
-                    "error": result[1][n],
+                    "result": result_final[0][n],
+                    "error": result_final[1][n],
                     "chi2/dof": chisqdof
                 },
                 "provenance": provenance,
