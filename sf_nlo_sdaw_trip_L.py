@@ -356,8 +356,6 @@ if __name__ == "__main__":
     
     n_iter = 10
 
-    xmax = 40.0
-
     vegas_instance = VegasFlow(n_dim, n_events, xmin=[0, 0, 0, 0, 0, 0, 0, 0, 0], xmax=[1, 1, xmax, xmax, 2.0*np.pi, xmax, 2.0*np.pi, xmax, 2.0*np.pi])
 
     integrand_vegasflow = lambda xx: integrand(xx,tfgrid,x_ref_min,x_ref_max,Q=Q,beta=beta,xpom=xpom)
