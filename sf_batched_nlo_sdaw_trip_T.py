@@ -244,7 +244,10 @@ def GNLOT(Q, beta, z0, z1, x20, th20, x20b, th20b, x21, th21, x21b, th21b):
 
     # Bessel calculation: Mx (1, M) * Y012 (N, 1) -> (N, M)
     # bessel_k1(Q * X012) -> (N, 1)
-    res_bessel = tf.math.special.bessel_k1(Q * X012) * tf.math.special.bessel_k1(Q * X012b) * (1.0 / Y012) * tf.math.special.bessel_j1(Mx * Y012)
+    res_bessel = tf.math.special.bessel_k1(Q * X012) * tf.math.special.bessel_k1(Q * X012b) * 
+    (1.0 / (X012 * X012b)) * 
+    (1.0 / Y012) * 
+    tf.math.special.bessel_j1(Mx * Y012)
     
     # Kinematic factor (N, 1)
     kin_factor = z0 * z1 * sum_Y_terms
