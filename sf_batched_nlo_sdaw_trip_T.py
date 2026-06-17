@@ -478,7 +478,7 @@ if __name__ == "__main__":
             os.makedirs(save_dir, exist_ok=True)
             with open(result_path, "w") as f:
                 # VegasFlow does not return chisq/dof. Setting it to -1.0.
-                f.write(f"({result[0]}, {result[1]}, {chisqdof})")
+                f.write(f"({result_final[0]}, {result_final[1]}, {chisqdof})")
             
             trained_grid_filename = (f"grid_niter_{n_iter}_neval_{n_events}_x_{xpomval}_Q_{Qval}_beta_{betavals[main_dimension]}.json")
             meta["trained_grid"] = trained_grid_filename
