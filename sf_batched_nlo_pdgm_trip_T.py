@@ -415,8 +415,10 @@ if __name__ == "__main__":
     logrmax = np.log(rmax)
     x_ref_min = tf.constant(np.array([ymin, logrmin]))
     x_ref_max = tf.constant(np.array([ymax, logrmax]))
-    
-    tfgrid = GetYRgrid(dipole_path)
+
+    numpy_grid = GetYRgrid(dipole_path)
+    tfgrid = tf.constant(numpy_grid, dtype = tf.float64)
+    #print(f"Type of tfgrid: {type(tfgrid)}")
     
     n_dim = 9
     
