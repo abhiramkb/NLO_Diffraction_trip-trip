@@ -264,6 +264,7 @@ def GNLOT(Q, beta, z0, z1, x20, th20, x20b, th20b, x21, th21, x21b, th21b):
     return res_bessel * kin_factor # Shape: (N, M)
 
 
+@tf.function(jit_compile=True)
 def S012(tfgrid, x_ref_min, x_ref_max, Y, x20, th20, x21, th21):
     # Y is (N, M), coordinates are (N, 1)
     Nc = 3.0
