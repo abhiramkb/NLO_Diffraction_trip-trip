@@ -234,11 +234,11 @@ def calculate_sum_Y_terms(z0, z1, z2, x20, th20, x20b, th20b, x21, th21, x21b, t
     return sum_Y_terms
 
 # --- VECTORIZED GNLOT ---
-def GNLOT(Q, beta, z0, z1, x20, th20, x20b, th20b, x21, th21, x21b, th21b):
+def GNLOT(Q, beta, z0, z1, z2, x20, th20, x20b, th20b, x21, th21, x21b, th21b):
     # beta is (1, M)
     # Coordinates (z0, x20, etc) are (N, 1)
     Mx = tf.sqrt(1.0/beta - 1.0) * Q # Shape: (1, M)
-    z2 = 1.0 - z0 - z1 # Shape: (N, 1)
+    #z2 = 1.0 - z0 - z1 # Shape: (N, 1)
 
     cos_th21_m_th20 = tf.cos(th21 - th20)
     cos_th21b_m_th20b = tf.cos(th21b - th20b)
@@ -351,7 +351,7 @@ def integrand(xx, tfgrid, x_ref_min, x_ref_max, Q=2.0, beta=0.1, xpom=0.01):
 
     # 2. Main Physics Kernels
     # Note: Pass z2 to GNLOT so it doesn't recompute `1.0 - z0 - z1`
-    term2 = GNLOT(Q, beta_vec, z0, z1, x20, th20, x20b, th20b, x21, th21, x21b, th21b)
+    term2 = GNLOT(Q, beta_vec, z0, z1, z2, x20, th20, x20b, th20b, x21, th21, x21b, th21b)
     term3 = (1.0 - S012(tfgrid, x_ref_min, x_ref_max, Yqqg, x20, th20, x21, th21))
     term4 = (1.0 - S012(tfgrid, x_ref_min, x_ref_max, Yqqg, x20b, th20b, x21b, th21b))
 
