@@ -301,41 +301,56 @@ def S012(tfgrid, x_ref_min, x_ref_max, Y, x20, th20, x21, th21):
     Svals = 1.0 - Nvals
     return (Nc / (2.0 * CF)) * (Svals[0] * Svals[1] - (1.0 / Nc**2) * Svals[2])
 
-# --- VECTORIZED INTEGRAND ---
-@tf.function
-def integrand(xx, tfgrid, x_ref_min, x_ref_max, Q=2.0, beta=0.1, xpom=0.01):
-    # xx: (N, 9)
-    # beta: (M,)
-    beta_vec = tf.reshape(beta, (1, -1)) # Shape: (1, M)
-    
-    # Unstack and expand to (N, 1)
+@tf.function(jit_compile=True)
+def compute_integrand_preamble(xx, beta_vec, Q, xpom, Q0sq):
+    """
+    Computes coordinate transformations, kinematics, Yqqg, and term1 in XLA.
+    Outputs:
+        term1: (N, 1)
+        z1, z2: (N, 1)
+        Yqqg: (N, M)
+    """
+    # Unstack coordinates (N, 1)
     unstacked = tf.unstack(xx, axis=-1)
     z0, t, x20, x20b, th20b, x21, th21, x21b, th21b = [v[:, tf.newaxis] for v in unstacked]
 
+    # Transverse distance calculations
     x01 = tf.sqrt(x20**2 + x21**2 - 2.0 * x20 * x21 * tf.cos(th21))
     x01b = tf.sqrt(x20b**2 + x21b**2 - 2.0 * x20b * x21b * tf.cos(th20b - th21b))
     measure = x20 * x20b * x21 * x21b
     
+    # Kinematic substitutions
     zmin = 0.0
     zmax = (1.0 - z0)
-    z1 = zmin + (zmax - zmin)*t
+    z1 = zmin + (zmax - zmin) * t
     jac = (zmax - zmin)
     z2 = 1.0 - z0 - z1
 
     Qsq = Q**2
-    Q0sq = 1.0
     
-    # Wsq (1, M), Yqqg (N, M)
+    # Wsq: (1, M), Yqqg: (N, M) via broadcasting with z2 (N, 1)
     Wsq = Qsq * (1.0 / (beta_vec * xpom) - 1.0)
     Yqqg = tf.math.log(z2 * (Wsq + Qsq) / Q0sq)
 
-    th20 = 0.0
-    
-    # Main calculation
-    # alphas: (N, 1)
-    # GNLOT: (N, M)
-    # S012 components: (N, M)
+    # Note: alphas(r) must also be XLA-compatible if included here
     term1 = jac * measure * tf.sqrt(alphas(x01) * alphas(x01b))
+
+    return term1, z0, z1, z2, x20, x20b, th20b, x21, th21, x21b, th21b, Yqqg
+
+@tf.function
+def integrand(xx, tfgrid, x_ref_min, x_ref_max, Q=2.0, beta=0.1, xpom=0.01):
+    beta_vec = tf.reshape(beta, (1, -1)) # Shape: (1, M)
+    Q0sq = 1.0
+    th20 = 0.0
+
+    # 1. Accelerated Preamble (XLA JIT)
+    (term1, z0, z1, z2, x20, x20b, 
+     th20b, x21, th21, x21b, th21b, Yqqg) = compute_integrand_preamble(
+        xx, beta_vec, Q, xpom, Q0sq
+    )
+
+    # 2. Main Physics Kernels
+    # Note: Pass z2 to GNLOT so it doesn't recompute `1.0 - z0 - z1`
     term2 = GNLOT(Q, beta_vec, z0, z1, x20, th20, x20b, th20b, x21, th21, x21b, th21b)
     term3 = (1.0 - S012(tfgrid, x_ref_min, x_ref_max, Yqqg, x20, th20, x21, th21))
     term4 = (1.0 - S012(tfgrid, x_ref_min, x_ref_max, Yqqg, x20b, th20b, x21b, th21b))
