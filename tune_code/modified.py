@@ -272,11 +272,7 @@ def calculate_GNLOT_terms(z0, z1, z2, x20, th20, x20b, th20b, x21, th21, x21b, t
     return X012, X012b, Y012, kin_factor
 
 # --- VECTORIZED GNLOT ---
-def GNLOT(Q, beta, z0, z1, z2, x20, th20, x20b, th20b, x21, th21, x21b, th21b):
-    # beta is (1, M)
-    # Coordinates (z0, x20, etc) are (N, 1)
-    Mx = tf.sqrt(1.0/beta - 1.0) * Q # Shape: (1, M)
-    #z2 = 1.0 - z0 - z1 # Shape: (N, 1)
+def GNLOT(Q, Mx, z0, z1, z2, x20, th20, x20b, th20b, x21, th21, x21b, th21b):
 
     # All non-Bessel coordinate and kinematic calculations in ONE fused XLA block
     X012, X012b, Y012, kin_factor = calculate_GNLOT_terms(z0, z1, z2, x20, th20, x20b, th20b, x21, th21, x21b, th21b)
@@ -364,7 +360,7 @@ def compute_integrand_preamble(xx, beta_vec, Q, xpom, Q0sq):
     return term1, z0, z1, z2, x20, x20b, th20b, x21, th21, x21b, th21b, Yqqg
 
 @tf.function
-def integrand(xx, tfgrid, x_ref_min, x_ref_max, Q=2.0, beta=0.1, xpom=0.01):
+def integrand(xx, tfgrid, x_ref_min, x_ref_max, Mx, Q=2.0, beta=0.1, xpom=0.01):
     beta_vec = tf.reshape(beta, (1, -1)) # Shape: (1, M)
     Q0sq = 1.0
     th20 = 0.0
@@ -377,7 +373,7 @@ def integrand(xx, tfgrid, x_ref_min, x_ref_max, Q=2.0, beta=0.1, xpom=0.01):
 
     # 2. Main Physics Kernels
     # Note: Pass z2 to GNLOT so it doesn't recompute `1.0 - z0 - z1`
-    term2 = GNLOT(Q, beta_vec, z0, z1, z2, x20, th20, x20b, th20b, x21, th21, x21b, th21b)
+    term2 = GNLOT(Q, Mx, z0, z1, z2, x20, th20, x20b, th20b, x21, th21, x21b, th21b)
     term3 = (1.0 - S012(tfgrid, x_ref_min, x_ref_max, Yqqg, x20, th20, x21, th21))
     term4 = (1.0 - S012(tfgrid, x_ref_min, x_ref_max, Yqqg, x20b, th20b, x21b, th21b))
 
@@ -437,6 +433,9 @@ if __name__ == "__main__":
     xmax=tf.constant(args["xmax"], dtype=tf.float64)
     n_events = int(args["neval"])
 
+    beta_vec = tf.reshape(beta_list, (1, -1))       # (1, M)
+    Mx_const = tf.sqrt(1.0 / beta_vec - 1.0) * Q     # precomputed once
+
     raw_dipole_path = args["dipole_path"]
     dipole_path = os.path.abspath(raw_dipole_path) if raw_dipole_path !="" else ""
     args["dipole_path"] = dipole_path #Updating dict with absolute path
@@ -479,7 +478,7 @@ if __name__ == "__main__":
 
     vegas_instance = VegasFlow(n_dim, n_events, xmin=[0, 0, 0, 0, 0, 0, 0, 0, 0], xmax=[1, 1, xmax, xmax, 2.0*np.pi, xmax, 2.0*np.pi, xmax, 2.0*np.pi],main_dimension = main_dimension)
 
-    integrand_vegasflow = lambda xx: integrand(xx,tfgrid,x_ref_min,x_ref_max,Q=Q,beta=beta_list,xpom=xpom)
+    integrand_vegasflow = lambda xx: integrand(xx,tfgrid,x_ref_min,x_ref_max,Mx_const,Q=Q,beta=beta_list,xpom=xpom)
     
     vegas_instance.compile(integrand_vegasflow)
 
