@@ -18,6 +18,7 @@ import tensorflow_probability as tfp
 from tensorflow.experimental import numpy as tnp #Use tnp instead of numpy
 import argparse
 
+@tf.function(jit_compile=True)
 def alphas(r):
 
     LambdaQCD = 0.241
