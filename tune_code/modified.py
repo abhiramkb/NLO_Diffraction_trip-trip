@@ -288,11 +288,11 @@ def GNLOT(Q, Mx, z0, z1, z2, x20, th20, x20b, th20b, x21, th21, x21b, th21b):
 
 
 @tf.function(jit_compile=True)
-def S012(tfgrid, x_ref_min, x_ref_max, Y, x20, th20, x21, th21):
+def S012(tfgrid, x_ref_min, x_ref_max, Y, x10, x20, th20, x21, th21):
     # Y is (N, M), coordinates are (N, 1)
     Nc = 3.0
     CF = 4.0/3.0
-    x10 = tf.sqrt(x20**2 + x21**2 - 2.0 * x20 * x21 * tf.cos(th20 - th21))
+    #x10 = tf.sqrt(x20**2 + x21**2 - 2.0 * x20 * x21 * tf.cos(th20 - th21))
 
     shape_N_M = tf.shape(Y)
 
@@ -357,7 +357,7 @@ def compute_integrand_preamble(xx, beta_vec, Q, xpom, Q0sq):
     # Note: alphas(r) must also be XLA-compatible if included here
     term1 = jac * measure * tf.sqrt(alphas(x01) * alphas(x01b))
 
-    return term1, z0, z1, z2, x20, x20b, th20b, x21, th21, x21b, th21b, Yqqg
+    return term1, z0, z1, z2, x01, x01b, x20, x20b, th20b, x21, th21, x21b, th21b, Yqqg
 
 @tf.function
 def integrand(xx, tfgrid, x_ref_min, x_ref_max, Mx, Q=2.0, beta=0.1, xpom=0.01):
@@ -366,7 +366,7 @@ def integrand(xx, tfgrid, x_ref_min, x_ref_max, Mx, Q=2.0, beta=0.1, xpom=0.01):
     th20 = 0.0
 
     # 1. Accelerated Preamble (XLA JIT)
-    (term1, z0, z1, z2, x20, x20b, 
+    (term1, z0, z1, z2, x01, x01b, x20, x20b, 
      th20b, x21, th21, x21b, th21b, Yqqg) = compute_integrand_preamble(
         xx, beta_vec, Q, xpom, Q0sq
     )
@@ -374,10 +374,10 @@ def integrand(xx, tfgrid, x_ref_min, x_ref_max, Mx, Q=2.0, beta=0.1, xpom=0.01):
     # 2. Main Physics Kernels
     # Note: Pass z2 to GNLOT so it doesn't recompute `1.0 - z0 - z1`
     term2 = GNLOT(Q, Mx, z0, z1, z2, x20, th20, x20b, th20b, x21, th21, x21b, th21b)
-    term3 = (1.0 - S012(tfgrid, x_ref_min, x_ref_max, Yqqg, x20, th20, x21, th21))
-    term4 = (1.0 - S012(tfgrid, x_ref_min, x_ref_max, Yqqg, x20b, th20b, x21b, th21b))
+    term3 = (1.0 - S012(tfgrid, x_ref_min, x_ref_max, Yqqg, x01, x20, th20, x21, th21))
+    term4 = (1.0 - S012(tfgrid, x_ref_min, x_ref_max, Yqqg, x01b, x20b, th20b, x21b, th21b))
 
-    return term1 * term2 * term3 * term4 # Result: (N, M)
+    return term1 * (term2 * (term3 * term4)) # Result: (N, M)
 
 # --- VERIFICATION BLOCK ---
 if __name__ == "__main__":
