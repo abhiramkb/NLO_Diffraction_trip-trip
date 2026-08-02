@@ -324,6 +324,51 @@ def S012(tfgrid, x_ref_min, x_ref_max, Y, x10, x20, th20, x21, th21):
     return (Nc / (2.0 * CF)) * (Svals[0] * Svals[1] - (1.0 / Nc**2) * Svals[2])
 
 @tf.function(jit_compile=True)
+def both_S012s(tfgrid, x_ref_min, x_ref_max, Y, x10, x20, th20, x21, th21, x10b, x20b, th20b, x21b, th21b):
+    # Y is (N, M), coordinates are (N, 1)
+    Nc = tf.constant(3.0, dtype = tf.float64)
+    CF = tf.constant(4.0/3.0, dtype = tf.float64)
+    #x10 = tf.sqrt(x20**2 + x21**2 - 2.0 * x20 * x21 * tf.cos(th20 - th21))
+
+    shape_N_M = tf.shape(Y)
+
+  # Broadcast coordinates to (N, M)
+    log_x20 = tf.broadcast_to(tf.math.log(x20), shape_N_M)
+    log_x21 = tf.broadcast_to(tf.math.log(x21), shape_N_M)
+    log_x10 = tf.broadcast_to(tf.math.log(x10), shape_N_M)
+    log_x20b = tf.broadcast_to(tf.math.log(x20b), shape_N_M)
+    log_x21b = tf.broadcast_to(tf.math.log(x21b), shape_N_M)
+    log_x10b = tf.broadcast_to(tf.math.log(x10b), shape_N_M)
+
+    # Stack into (3, N, M, 2)
+    s0 = tf.stack([Y, log_x20], axis=-1)
+    s1 = tf.stack([Y, log_x21], axis=-1)
+    s2 = tf.stack([Y, log_x10], axis=-1)
+    s0b = tf.stack([Y, log_x20b], axis=-1)
+    s1b = tf.stack([Y, log_x21b], axis=-1)
+    s2b = tf.stack([Y, log_x10b], axis=-1)
+    coords = tf.stack([s0, s1, s2, s0b, s1b, s2b], axis=0) # Shape: (6, N, M, 2)
+    # --- THE FIX: FLATTEN ---
+    # Collapse (6, N, M) into a single batch dimension
+    flat_coords = tf.reshape(coords, [-1, 2]) # Shape: (TotalPoints, 2)
+
+    # Interpolate using the flattened coordinates
+    # Because flat_coords is rank-2, tfp won't try to broadcast the grid
+    flat_Nvals = tfp.math.batch_interp_regular_nd_grid(
+        flat_coords, x_ref_min, x_ref_max, tfgrid,  axis=-2,
+        fill_value='constant_extension'
+    )
+
+    # Reshape back to (6, N, M)
+    Nvals = tf.reshape(flat_Nvals, [6, shape_N_M[0], shape_N_M[1]])
+
+    Svals = 1.0 - Nvals
+    S012 = (Nc / (2.0 * CF)) * (Svals[0] * Svals[1] - (1.0 / Nc**2) * Svals[2])
+    S012b = (Nc / (2.0 * CF)) * (Svals[3] * Svals[4] - (1.0 / Nc**2) * Svals[5])
+
+    return S012, S012b
+
+@tf.function(jit_compile=True)
 def compute_integrand_preamble(xx, beta_vec, Q, xpom, Q0sq):
     """
     Computes coordinate transformations, kinematics, Yqqg, and term1 in XLA.
@@ -371,11 +416,15 @@ def integrand(xx, tfgrid, x_ref_min, x_ref_max, Mx, Q=2.0, beta=0.1, xpom=0.01):
         xx, beta_vec, Q, xpom, Q0sq
     )
 
+    (s012, s012b) = both_S012s(tfgrid, x_ref_min, x_ref_max, Yqqg, x01, x20, th20, x21, th21, x01b, x20b, th20b, x21b, th21b)
+
+    #tf.print(s012b_ref - s012b_new)
+
     # 2. Main Physics Kernels
     # Note: Pass z2 to GNLOT so it doesn't recompute `1.0 - z0 - z1`
     term2 = GNLOT(Q, Mx, z0, z1, z2, x20, th20, x20b, th20b, x21, th21, x21b, th21b)
-    term3 = (1.0 - S012(tfgrid, x_ref_min, x_ref_max, Yqqg, x01, x20, th20, x21, th21))
-    term4 = (1.0 - S012(tfgrid, x_ref_min, x_ref_max, Yqqg, x01b, x20b, th20b, x21b, th21b))
+    term3 = (1.0 - s012)
+    term4 = (1.0 - s012b)
 
     return term1 * (term2 * (term3 * term4)) # Result: (N, M)
 
