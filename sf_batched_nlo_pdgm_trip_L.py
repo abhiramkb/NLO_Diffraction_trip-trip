@@ -18,6 +18,7 @@ import tensorflow_probability as tfp
 from tensorflow.experimental import numpy as tnp #Use tnp instead of numpy
 import argparse
 
+@tf.function(jit_compile=True)
 def alphas(r):
 
     LambdaQCD = 0.241
@@ -121,12 +122,8 @@ def GetYRgrid(path_to_file):
     NrY_data = np.array(NrY_data)
     return NrY_data[:,1:]
 
-# --- VECTORIZED GNLOL ---
-def GNLOL(Q, beta, z0, z1, x20, th20, x20b, th20b, x21, th21, x21b, th21b):
-    # beta is (1, M)
-    # Coordinates (z0, x20, etc) are (N, 1)
-    Mx = tf.sqrt(1.0/beta - 1.0) * Q # Shape: (1, M)
-    z2 = 1.0 - z0 - z1 # Shape: (N, 1)
+@tf.function(jit_compile=True)
+def calculate_GNLOL_terms(z0, z1, z2, x20, th20, x20b, th20b, x21, th21, x21b, th21b):
 
     cos_th21_m_th20 = tf.cos(th21 - th20)
     cos_th21b_m_th20b = tf.cos(th21b - th20b)
@@ -147,10 +144,6 @@ def GNLOL(Q, beta, z0, z1, x20, th20, x20b, th20b, x21, th21, x21b, th21b):
 
     epsilon = 1e-14
 
-    # Bessel calculation: Mx (1, M) * Y012 (N, 1) -> (N, M)
-    # bessel_k0(Q * X012) -> (N, 1)
-    res_bessel = tf.math.special.bessel_k0(Q * X012) * tf.math.special.bessel_k0(Q * X012b) * (1.0 / Y012) * tf.math.special.bessel_j1(Mx * Y012)
-    
     # Kinematic factor (N, 1)
     kin_factor = z0 * z1 * (
         z1**2*(2.0*z0*(1.0 - z1) + z2**2)*dot_x20_x20b/((x20**2 + epsilon) * (x20b**2 + epsilon))
@@ -158,14 +151,26 @@ def GNLOL(Q, beta, z0, z1, x20, th20, x20b, th20b, x21, th21, x21b, th21b):
         - z0*z1*(z0*(1.0 - z0) + z1*(1.0 - z1))*(dot_x20_x21b/((x20**2 + epsilon) * (x21b**2 + epsilon)) + dot_x21_x20b/((x21**2 + epsilon) * (x20b**2 + epsilon)))
     )
 
+    return X012, X012b, Y012, kin_factor
+    
+def GNLOL(Q, Mx, z0, z1, z2, x20, th20, x20b, th20b, x21, th21, x21b, th21b):
+    
+    # All non-Bessel coordinate and kinematic calculations in ONE fused XLA block
+    X012, X012b, Y012, kin_factor = calculate_GNLOL_terms(z0, z1, z2, x20, th20, x20b, th20b, x21, th21, x21b, th21b)
+
+    # Bessel calculation: Mx (1, M) * Y012 (N, 1) -> (N, M)
+    # bessel_k0(Q * X012) -> (N, 1)
+    res_bessel = tf.math.special.bessel_k0(Q * X012) * tf.math.special.bessel_k0(Q * X012b) * (1.0 / Y012) * tf.math.special.bessel_j1(Mx * Y012)
+
     return res_bessel * kin_factor # Shape: (N, M)
 
 
-def S012(tfgrid, x_ref_min, x_ref_max, Y, x20, th20, x21, th21):
+@tf.function(jit_compile=True)
+def both_S012s(tfgrid, x_ref_min, x_ref_max, Y, x10, x20, th20, x21, th21, x10b, x20b, th20b, x21b, th21b):
     # Y is (N, M), coordinates are (N, 1)
-    Nc = 3.0
-    CF = 4.0/3.0
-    x10 = tf.sqrt(x20**2 + x21**2 - 2.0 * x20 * x21 * tf.cos(th20 - th21))
+    Nc = tf.constant(3.0, dtype = tf.float64)
+    CF = tf.constant(4.0/3.0, dtype = tf.float64)
+    #x10 = tf.sqrt(x20**2 + x21**2 - 2.0 * x20 * x21 * tf.cos(th20 - th21))
 
     shape_N_M = tf.shape(Y)
 
@@ -173,14 +178,20 @@ def S012(tfgrid, x_ref_min, x_ref_max, Y, x20, th20, x21, th21):
     log_x20 = tf.broadcast_to(tf.math.log(x20), shape_N_M)
     log_x21 = tf.broadcast_to(tf.math.log(x21), shape_N_M)
     log_x10 = tf.broadcast_to(tf.math.log(x10), shape_N_M)
+    log_x20b = tf.broadcast_to(tf.math.log(x20b), shape_N_M)
+    log_x21b = tf.broadcast_to(tf.math.log(x21b), shape_N_M)
+    log_x10b = tf.broadcast_to(tf.math.log(x10b), shape_N_M)
 
     # Stack into (3, N, M, 2)
     s0 = tf.stack([Y, log_x20], axis=-1)
     s1 = tf.stack([Y, log_x21], axis=-1)
     s2 = tf.stack([Y, log_x10], axis=-1)
-    coords = tf.stack([s0, s1, s2], axis=0) # Shape: (3, N, M, 2)
+    s0b = tf.stack([Y, log_x20b], axis=-1)
+    s1b = tf.stack([Y, log_x21b], axis=-1)
+    s2b = tf.stack([Y, log_x10b], axis=-1)
+    coords = tf.stack([s0, s1, s2, s0b, s1b, s2b], axis=0) # Shape: (6, N, M, 2)
     # --- THE FIX: FLATTEN ---
-    # Collapse (3, N, M) into a single batch dimension
+    # Collapse (6, N, M) into a single batch dimension
     flat_coords = tf.reshape(coords, [-1, 2]) # Shape: (TotalPoints, 2)
 
     # Interpolate using the flattened coordinates
@@ -190,52 +201,71 @@ def S012(tfgrid, x_ref_min, x_ref_max, Y, x20, th20, x21, th21):
         fill_value='constant_extension'
     )
 
-    # Reshape back to (3, N, M)
-    Nvals = tf.reshape(flat_Nvals, [3, shape_N_M[0], shape_N_M[1]])
+    # Reshape back to (6, N, M)
+    Nvals = tf.reshape(flat_Nvals, [6, shape_N_M[0], shape_N_M[1]])
 
     Svals = 1.0 - Nvals
-    return (Nc / (2.0 * CF)) * (Svals[0] * Svals[1] - (1.0 / Nc**2) * Svals[2])
+    S012 = (Nc / (2.0 * CF)) * (Svals[0] * Svals[1] - (1.0 / Nc**2) * Svals[2])
+    S012b = (Nc / (2.0 * CF)) * (Svals[3] * Svals[4] - (1.0 / Nc**2) * Svals[5])
 
-# --- VECTORIZED INTEGRAND ---
-@tf.function
-def integrand(xx, tfgrid, x_ref_min, x_ref_max, Q=2.0, beta=0.1, xpom=0.01):
-    # xx: (N, 9)
-    # beta: (M,)
-    beta_vec = tf.reshape(beta, (1, -1)) # Shape: (1, M)
-    
-    # Unstack and expand to (N, 1)
+    return S012, S012b
+
+@tf.function(jit_compile=True)
+def compute_integrand_preamble(xx, beta_vec, Q, xpom, Q0sq):
+    """
+    Computes coordinate transformations, kinematics, Yqqg, and term1 in XLA.
+    Outputs:
+        term1: (N, 1)
+        z1, z2: (N, 1)
+        Yqqg: (N, M)
+    """
+    # Unstack coordinates (N, 1)
     unstacked = tf.unstack(xx, axis=-1)
     z0, t, x20, x20b, th20b, x21, th21, x21b, th21b = [v[:, tf.newaxis] for v in unstacked]
 
+    # Transverse distance calculations
     x01 = tf.sqrt(x20**2 + x21**2 - 2.0 * x20 * x21 * tf.cos(th21))
     x01b = tf.sqrt(x20b**2 + x21b**2 - 2.0 * x20b * x21b * tf.cos(th20b - th21b))
     measure = x20 * x20b * x21 * x21b
     
+    # Kinematic substitutions
     zmin = 0.0
     zmax = (1.0 - z0)
-    z1 = zmin + (zmax - zmin)*t
+    z1 = zmin + (zmax - zmin) * t
     jac = (zmax - zmin)
     z2 = 1.0 - z0 - z1
 
     Qsq = Q**2
-    Q0sq = 1.0
     
-    # Wsq (1, M), Yqqg (N, M)
+    # Wsq: (1, M), Yqqg: (N, M) via broadcasting with z2 (N, 1)
     Wsq = Qsq * (1.0 / (beta_vec * xpom) - 1.0)
     Yqqg = tf.math.log(z2 * (Wsq + Qsq) / Q0sq)
 
+    # Note: alphas(r) must also be XLA-compatible if included here
+    term1 = jac * measure * tf.sqrt(alphas(x01) * alphas(x01b))
+
+    return term1, z0, z1, z2, x01, x01b, x20, x20b, th20b, x21, th21, x21b, th21b, Yqqg
+
+@tf.function
+def integrand(xx, tfgrid, x_ref_min, x_ref_max, Mx, Q=2.0, beta=0.1, xpom=0.01):
+    beta_vec = tf.reshape(beta, (1, -1)) # Shape: (1, M)
+    Q0sq = 1.0
     th20 = 0.0
+
+    # 1. Accelerated Preamble (XLA JIT)
+    (term1, z0, z1, z2, x01, x01b, x20, x20b, 
+     th20b, x21, th21, x21b, th21b, Yqqg) = compute_integrand_preamble(
+        xx, beta_vec, Q, xpom, Q0sq
+    )
+
+    (s012, s012b) = both_S012s(tfgrid, x_ref_min, x_ref_max, Yqqg, x01, x20, th20, x21, th21, x01b, x20b, th20b, x21b, th21b)
     
     # Main calculation
-    # alphas: (N, 1)
-    # GNLOL: (N, M)
-    # S012 components: (N, M)
-    term1 = jac * measure * tf.sqrt(alphas(x01) * alphas(x01b))
-    term2 = GNLOL(Q, beta_vec, z0, z1, x20, th20, x20b, th20b, x21, th21, x21b, th21b)
-    term3 = (1.0 - S012(tfgrid, x_ref_min, x_ref_max, Yqqg, x20, th20, x21, th21))
-    term4 = (1.0 - S012(tfgrid, x_ref_min, x_ref_max, Yqqg, x20b, th20b, x21b, th21b))
+    term2 = GNLOL(Q, Mx, z0, z1, z2, x20, th20, x20b, th20b, x21, th21, x21b, th21b)
+    term3 = (1.0 - s012)
+    term4 = (1.0 - s012b)
 
-    return term1 * term2 * term3 * term4 # Result: (N, M)
+    return term1 * (term2 * (term3 * term4)) # Result: (N, M)
 
 # --- VERIFICATION BLOCK ---
 if __name__ == "__main__":
@@ -291,6 +321,9 @@ if __name__ == "__main__":
     xmax=tf.constant(args["xmax"], dtype=tf.float64)
     n_events = int(args["neval"])
 
+    beta_vec = tf.reshape(beta_list, (1, -1))       # (1, M)
+    Mx_const = tf.sqrt(1.0 / beta_vec - 1.0) * Q     # precomputed once
+
     raw_dipole_path = args["dipole_path"]
     dipole_path = os.path.abspath(raw_dipole_path) if raw_dipole_path !="" else ""
     args["dipole_path"] = dipole_path #Updating dict with absolute path
@@ -329,7 +362,7 @@ if __name__ == "__main__":
 
     vegas_instance = VegasFlow(n_dim, n_events, xmin=[0, 0, 0, 0, 0, 0, 0, 0, 0], xmax=[1, 1, xmax, xmax, 2.0*np.pi, xmax, 2.0*np.pi, xmax, 2.0*np.pi],main_dimension = main_dimension)
 
-    integrand_vegasflow = lambda xx: integrand(xx,tfgrid,x_ref_min,x_ref_max,Q=Q,beta=beta_list,xpom=xpom)
+    integrand_vegasflow = lambda xx: integrand(xx,tfgrid,x_ref_min,x_ref_max,Mx_const,Q=Q,beta=beta_list,xpom=xpom)
     
     vegas_instance.compile(integrand_vegasflow)
 

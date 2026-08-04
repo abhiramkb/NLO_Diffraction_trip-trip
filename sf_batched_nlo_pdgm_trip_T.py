@@ -420,8 +420,6 @@ def integrand(xx, tfgrid, x_ref_min, x_ref_max, Mx, Q=2.0, beta=0.1, xpom=0.01):
 
     #tf.print(s012b_ref - s012b_new)
 
-    # 2. Main Physics Kernels
-    # Note: Pass z2 to GNLOT so it doesn't recompute `1.0 - z0 - z1`
     term2 = GNLOT(Q, Mx, z0, z1, z2, x20, th20, x20b, th20b, x21, th21, x21b, th21b)
     term3 = (1.0 - s012)
     term4 = (1.0 - s012b)
