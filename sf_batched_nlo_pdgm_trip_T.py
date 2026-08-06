@@ -19,21 +19,18 @@ from tensorflow.experimental import numpy as tnp #Use tnp instead of numpy
 import argparse
 
 @tf.function(jit_compile=True)
-def alphas(r):
-
+def alphas(r, Csq):
     LambdaQCD = 0.241
     Nc = 3.0
     Nf = 3.0
     beta = (11.0*Nc - 2.0*Nf)/3.0
-    Csq = 663.0
-    c = 0.2 # From 2007.01645
-    onebyc = 5.0 
-    mu0 = 2.5*LambdaQCD #From 2007.01645
-    mu0sq = mu0**2
     LambdaQCDsq = LambdaQCD**2
-    
-    return 4*tnp.pi/(beta*tnp.log(((mu0sq/LambdaQCDsq)**onebyc + (4*Csq/(LambdaQCDsq*r*r))**onebyc)**c))
 
+    res = 12*tnp.pi/((33.0 - 2.0*Nf)*tnp.log(4*Csq/(LambdaQCDsq*r*r)))
+    alphas_cutoff = 1.0
+    
+    return tf.minimum(res,alphas_cutoff)
+    
 def ReadBKDipole(path_to_file):
     with open(path_to_file) as f:
         content = f.read().split("###")
@@ -369,7 +366,7 @@ def both_S012s(tfgrid, x_ref_min, x_ref_max, Y, x10, x20, th20, x21, th21, x10b,
     return S012, S012b
 
 @tf.function(jit_compile=True)
-def compute_integrand_preamble(xx, beta_vec, Q, xpom, Q0sq):
+def compute_integrand_preamble(xx, Csq, beta_vec, Q, xpom, Q0sq):
     """
     Computes coordinate transformations, kinematics, Yqqg, and term1 in XLA.
     Outputs:
@@ -400,12 +397,12 @@ def compute_integrand_preamble(xx, beta_vec, Q, xpom, Q0sq):
     Yqqg = tf.math.log(z2 * (Wsq + Qsq) / Q0sq)
 
     # Note: alphas(r) must also be XLA-compatible if included here
-    term1 = jac * measure * tf.sqrt(alphas(x01) * alphas(x01b))
+    term1 = jac * measure * tf.sqrt(alphas(x01, Csq) * alphas(x01b, Csq))
 
     return term1, z0, z1, z2, x01, x01b, x20, x20b, th20b, x21, th21, x21b, th21b, Yqqg
 
 @tf.function
-def integrand(xx, tfgrid, x_ref_min, x_ref_max, Mx, Q=2.0, beta=0.1, xpom=0.01):
+def integrand(xx, tfgrid, Csq, x_ref_min, x_ref_max, Mx, Q=2.0, beta=0.1, xpom=0.01):
     beta_vec = tf.reshape(beta, (1, -1)) # Shape: (1, M)
     Q0sq = 1.0
     th20 = 0.0
@@ -413,7 +410,7 @@ def integrand(xx, tfgrid, x_ref_min, x_ref_max, Mx, Q=2.0, beta=0.1, xpom=0.01):
     # 1. Accelerated Preamble (XLA JIT)
     (term1, z0, z1, z2, x01, x01b, x20, x20b, 
      th20b, x21, th21, x21b, th21b, Yqqg) = compute_integrand_preamble(
-        xx, beta_vec, Q, xpom, Q0sq
+        xx, Csq, beta_vec, Q, xpom, Q0sq
     )
 
     (s012, s012b) = both_S012s(tfgrid, x_ref_min, x_ref_max, Yqqg, x01, x20, th20, x21, th21, x01b, x20b, th20b, x21b, th21b)
@@ -435,6 +432,7 @@ if __name__ == "__main__":
     parser.add_argument("--x", type=float, default=0.01, help="xpom - Pomeron-x")
     parser.add_argument("--xmax", type=float, default=40.0, help="xmax (upper integration bound for |x_ij|)")
     parser.add_argument("--dipole_path", type=str, required=True, help="Path to the BK table")
+    parser.add_argument("--Csq", type=float, required=True, help="Csq - alpha_s parameter associated with dipole grid")
     parser.add_argument("--neval", type=float, default=1e6, help="Number of integration points")
     parser.add_argument("--input_grid_path", type=str, default="", help="Path to the pre-trained VEGAS grid (if available)")
     parser.add_argument("--save_dir", type=str, default="", help="Saves result to specified folder")
@@ -471,6 +469,7 @@ if __name__ == "__main__":
     betavals = np.array(args["beta"]) #Array of beta values for simultaneous processing
     xpomval = args["x"]
     xmaxval = args["xmax"]
+    Csqval = args["Csq"]
 
     print(f"Processing beta value(s): {betavals}")
     
@@ -478,6 +477,7 @@ if __name__ == "__main__":
     beta_list=tf.constant(args["beta"], dtype=tf.float64)
     xpom=tf.constant(args["x"], dtype=tf.float64)
     xmax=tf.constant(args["xmax"], dtype=tf.float64)
+    Csq=tf.constant(args["Csq"], dtype=tf.float64)
     n_events = int(args["neval"])
 
     beta_vec = tf.reshape(beta_list, (1, -1))       # (1, M)
@@ -525,7 +525,7 @@ if __name__ == "__main__":
 
     vegas_instance = VegasFlow(n_dim, n_events, xmin=[0, 0, 0, 0, 0, 0, 0, 0, 0], xmax=[1, 1, xmax, xmax, 2.0*np.pi, xmax, 2.0*np.pi, xmax, 2.0*np.pi],main_dimension = main_dimension)
 
-    integrand_vegasflow = lambda xx: integrand(xx,tfgrid,x_ref_min,x_ref_max,Mx_const,Q=Q,beta=beta_list,xpom=xpom)
+    integrand_vegasflow = lambda xx: integrand(xx,tfgrid,Csq,x_ref_min,x_ref_max,Mx_const,Q=Q,beta=beta_list,xpom=xpom)
     
     vegas_instance.compile(integrand_vegasflow)
 
@@ -546,7 +546,7 @@ if __name__ == "__main__":
     for n, beta in enumerate(betavals):
         # --- Organize data into dictionaries ---
         # Input parameters
-        param_keys = ["Q", "x", "xmax", "neval", "dipole_path"]
+        param_keys = ["Q", "x", "xmax", "neval", "dipole_path", "Csq"]
         params = {k: args[k] for k in param_keys}
         params["beta"] = beta
 
