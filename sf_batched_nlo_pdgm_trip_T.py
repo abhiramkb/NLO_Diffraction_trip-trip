@@ -24,12 +24,14 @@ def alphas(r, Csq):
     Nc = 3.0
     Nf = 3.0
     beta = (11.0*Nc - 2.0*Nf)/3.0
+    Csq = 9.836
     LambdaQCDsq = LambdaQCD**2
 
-    res = 12*tnp.pi/((33.0 - 2.0*Nf)*tnp.log(4*Csq/(LambdaQCDsq*r*r)))
-    alphas_cutoff = 1.0
+    r_cutoff = (2.0*tnp.sqrt(Csq)/LambdaQCD)*tnp.exp(-42.0*tnp.pi/(7.0*(33-2.0*Nf)));
+
+    rval = tf.minimum(r, r_cutoff)
     
-    return tf.minimum(res,alphas_cutoff)
+    return 12*tnp.pi/((33.0 - 2.0*Nf)*tnp.log(4*Csq/(LambdaQCDsq*rval*rval)))
     
 def ReadBKDipole(path_to_file):
     with open(path_to_file) as f:
