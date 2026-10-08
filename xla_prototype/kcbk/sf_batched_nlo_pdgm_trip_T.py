@@ -7,7 +7,7 @@
 # The "pdgm" in the filename stands for Parent dipole, geometric mean alpha_s prescription.
 #
 # XLA prototype: the whole integrand is one XLA cluster (XLA-compatible Bessel functions) and
-# VegasFlowFastTrain fills the VEGAS grid-training histogram in O(N) and runs each chunk of
+# VegasFlowImproved fills the VEGAS grid-training histogram in O(N) and runs each chunk of
 # events (random numbers, grid mapping, integrand, sums) as one XLA cluster.
 import time
 import os
@@ -16,12 +16,15 @@ import json
 import math
 import numpy as np
 from scipy.interpolate import RegularGridInterpolator
+import sys
+# The shared modules (vegasflow_improved, xla_bessel_functions) are in the parent folder
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 from vegasflow_improved import VegasFlowImproved
 import tensorflow as tf
 import tensorflow_probability as tfp
 from tensorflow.experimental import numpy as tnp #Use tnp instead of numpy
 import argparse
-from xla_bessel_functions import bessel_k0_xla, bessel_j1_xla
+from xla_bessel_functions import bessel_k1_xla, bessel_j1_xla
 
 @tf.function(jit_compile=True)
 def alphas(r, Csq):
@@ -29,14 +32,14 @@ def alphas(r, Csq):
     Nc = 3.0
     Nf = 3.0
     beta = (11.0*Nc - 2.0*Nf)/3.0
+    c = 0.2 # From 2007.01645
+    onebyc = 5.0 
+    mu0 = 2.5*LambdaQCD #From 2007.01645
+    mu0sq = mu0**2
     LambdaQCDsq = LambdaQCD**2
-
-    r_cutoff = (2.0*tnp.sqrt(Csq)/LambdaQCD)*tnp.exp(-42.0*tnp.pi/(7.0*(33-2.0*Nf)));
-
-    rval = tf.minimum(r, r_cutoff)
     
-    return 12*tnp.pi/((33.0 - 2.0*Nf)*tnp.log(4*Csq/(LambdaQCDsq*rval*rval)))
-
+    return 4*tnp.pi/(beta*tnp.log(((mu0sq/LambdaQCDsq)**onebyc + (4*Csq/(LambdaQCDsq*r*r))**onebyc)**c))
+    
 def ReadBKDipole(path_to_file):
     with open(path_to_file) as f:
         content = f.read().split("###")
@@ -126,50 +129,167 @@ def GetYRgrid(path_to_file):
     return NrY_data[:,1:]
 
 @tf.function(jit_compile=True)
-def calculate_GNLOL_terms(z0, z1, z2, x20, th20, x20b, th20b, x21, th21, x21b, th21b):
+def calculate_GNLOT_terms(z0, z1, z2, x20, th20, x20b, th20b, x21, th21, x21b, th21b):
+    """
+    Computes sum_Y_terms, X012, X012b and Y012 with XLA JIT compilation enabled.
+    Inputs are expected to have shape (N, 1).
+    """
+    cos_th20_m_th20b = tf.cos(th20 - th20b)
+    cos_th21_m_th21b = tf.cos(th21 - th21b)
+    cos_th20_m_th21b = tf.cos(th20 - th21b)
+    cos_th21_m_th20b = tf.cos(th21 - th20b)
+    cos_th20_m_th21 = tf.cos(th20 - th21)
+    cos_th20b_m_th21b = tf.cos(th20b - th21b)
+    
+    # Basic dot products
+    dot_x20_x20b = x20 * x20b * cos_th20_m_th20b
+    dot_x21_x21b = x21 * x21b * cos_th21_m_th21b
+    dot_x20_x21b = x20 * x21b * cos_th20_m_th21b
+    dot_x21_x20b = x21 * x20b * cos_th21_m_th20b
+    dot_x20_x21 = x20 * x21 * cos_th20_m_th21
+    dot_x20b_x21b = x20b * x21b * cos_th20b_m_th21b
 
-    # Cosines of the angle differences, each evaluated once (cos is even)
-    cos_th21_m_th20 = tf.cos(th21 - th20)
-    cos_th21b_m_th20b = tf.cos(th21b - th20b)
-    cos_th21b_m_th21 = tf.cos(th21b - th21)
-    cos_th21b_m_th20 = tf.cos(th21b - th20)
-    cos_th20b_m_th21 = tf.cos(th20b - th21)
-    cos_th20b_m_th20 = tf.cos(th20b - th20)
+    inv_1m_z1 = 1.0 / (1.0 - z1)
+    inv_1m_z0 = 1.0 / (1.0 - z0)
+    z0_over_1m_z1 = z0 * inv_1m_z1
+    z1_over_1m_z0 = z1 * inv_1m_z0
 
-    # Coordinate-only terms are (N, 1)
-    X012 = tf.sqrt(z0 * z1 * (x21**2 + x20**2 - 2*x21*x20*cos_th21_m_th20) + z0 * z2 * x20**2 + z1 * z2 * x21**2)
-    X012b = tf.sqrt(z0 * z1 * (x21b**2 + x20b**2 - 2*x21b*x20b*cos_th21b_m_th20b) + z0 * z2 * x20b**2 + z1 * z2 * x21b**2)
+    one_m_z1_sq = (1.0 - z1)**2
+    one_m_z0_sq = (1.0 - z0)**2
 
-    Y012_part1 = (z0 * z1 * (x21b**2 + x20b**2 - 2*x21b*x20b*cos_th21b_m_th20b + x21**2 + x20**2 - 2*x21*x20*cos_th21_m_th20 - 2*x21b*x21*cos_th21b_m_th21 + 2*x21b*x20*cos_th21b_m_th20 + 2*x20b*x21*cos_th20b_m_th21 - 2*x20b*x20*cos_th20b_m_th20))
-    Y012_part2 = (z0 * z2 * (x20b**2 + x20**2 - 2*x20b*x20*cos_th20b_m_th20))
-    Y012_part3 = (z1 * z2 * (x21b**2 + x21**2 - 2*x21b*x21*cos_th21b_m_th21))
+    z0_sq = z0**2
+    z1_sq = z1**2
+
+    z0_x_z1 = z0 * z1 
+    z0_x_z2 = z0 * z2
+    z1_x_z2 = z1 * z2
+
+    x20_sq = x20**2
+    x21_sq = x21**2
+    x20b_sq = x20b**2
+    x21b_sq = x21b**2
+
+    X012 = tf.sqrt(z0_x_z1 * (x21_sq + x20_sq - 2*dot_x20_x21) + z0_x_z2 * x20_sq + z1_x_z2 * x21_sq)
+    X012b = tf.sqrt(z0_x_z1 * (x21b_sq + x20b_sq - 2*dot_x20b_x21b) + z0_x_z2 * x20b_sq + z1_x_z2 * x21b_sq)
+
+    Y012_part1 = (z0_x_z1 * (x21b_sq + x20b_sq - 2*dot_x20b_x21b + x21_sq + x20_sq - 2*dot_x20_x21 - 2*dot_x21_x21b + 2*dot_x20_x21b + 2*dot_x21_x20b - 2*dot_x20_x20b))
+    Y012_part2 = (z0_x_z2 * (x20b_sq + x20_sq - 2*dot_x20_x20b))
+    Y012_part3 = (z1_x_z2 * (x21b_sq + x21_sq - 2*dot_x21_x21b))
     Y012 = tf.sqrt(Y012_part1 + Y012_part2 + Y012_part3) # Shape: (N, 1)
 
-    dot_x20_x20b = x20 * x20b * cos_th20b_m_th20
-    dot_x21_x21b = x21 * x21b * cos_th21b_m_th21
-    dot_x20_x21b = x20 * x21b * cos_th21b_m_th20
-    dot_x21_x20b = x21 * x20b * cos_th20b_m_th21
-
-    epsilon = 1e-14
-
-    # Kinematic factor (N, 1)
-    kin_factor = z0 * z1 * (
-        z1**2*(2.0*z0*(1.0 - z1) + z2**2)*dot_x20_x20b/((x20**2 + epsilon) * (x20b**2 + epsilon))
-        + z0**2*(2.0*z1*(1.0 - z0) + z2**2)*dot_x21_x21b/((x21**2 + epsilon) * (x21b**2 + epsilon))
-        - z0*z1*(z0*(1.0 - z0) + z1*(1.0 - z1))*(dot_x20_x21b/((x20**2 + epsilon) * (x21b**2 + epsilon)) + dot_x21_x20b/((x21**2 + epsilon) * (x20b**2 + epsilon)))
+    
+    
+    # Composite dot products from (29)
+    dot_x20_x0p2c1 = dot_x20_x21 - z0_over_1m_z1 * x20_sq
+    dot_x20b_x0p2c1b = dot_x20b_x21b - z0_over_1m_z1 * x20b_sq
+    dot_x20b_x0p2c1 = dot_x21_x20b - z0_over_1m_z1 * dot_x20_x20b
+    dot_x20_x0p2c1b = dot_x20_x21b - z0_over_1m_z1 * dot_x20_x20b
+    dot_x0p2c1_x0p2c1b = (
+        dot_x21_x21b -
+        z0_over_1m_z1 * (dot_x21_x20b + dot_x20_x21b) +
+        (z0_sq/one_m_z1_sq) * dot_x20_x20b
     )
 
+    # Composite dot products from (30)
+    dot_x21_x0c1p2 = z1_over_1m_z0 * x21_sq - dot_x20_x21
+    dot_x21_x0c1p2b = z1_over_1m_z0 * dot_x21_x21b - dot_x21_x20b
+    dot_x21b_x0c1p2 = z1_over_1m_z0 * dot_x21_x21b - dot_x20_x21b
+    dot_x21b_x0c1p2b = z1_over_1m_z0 * x21b_sq - dot_x20b_x21b
+    dot_x0c1p2_x0c1p2b = (
+        dot_x20_x20b -
+        z1_over_1m_z0 * (dot_x21_x20b + dot_x20_x21b) +
+        z1_over_1m_z0**2 * dot_x21_x21b
+    )
+
+    # Composite dot products from (33)
+    dot_x0p2c1_x0c1p2b = (
+        z1_over_1m_z0 * dot_x21_x21b - dot_x21_x20b -
+        (z0_x_z1/((1.0 - z0)*(1.0 - z1))) * dot_x20_x21b +
+        z0_over_1m_z1 * dot_x20_x20b
+    )
+    dot_x0c1p2_x0p2c1b = (
+        z1_over_1m_z0 * dot_x21_x21b - dot_x20_x21b -
+        (z0_x_z1/((1.0 - z0)*(1.0 - z1))) * dot_x21_x20b +
+        z0_over_1m_z1 * dot_x20_x20b
+    )
+    dot_x20_x0c1p2b = z1_over_1m_z0 * dot_x20_x21b - dot_x20_x20b
+    dot_x21b_x0p2c1 = dot_x21_x21b - z0_over_1m_z1 * dot_x20_x21b
+    dot_x20b_x0c1p2 = z1_over_1m_z0 * dot_x21_x20b - dot_x20_x20b
+    dot_x21_x0p2c1b = dot_x21_x21b - z0_over_1m_z1 * dot_x21_x20b
+
+    # Coefficient functions from Eqs. (29)–(33)
+    term1b = (
+        (z0_sq + one_m_z1_sq) * (1.0 - 2*z1*(1.0 - z1)) *
+        dot_x0p2c1_x0p2c1b * dot_x20_x20b
+    )
+    term2b = -(
+        (one_m_z1_sq - z0_sq) * (2.0*z1 - 1.0) *
+        (dot_x20_x0p2c1 * dot_x20b_x0p2c1b - dot_x20_x0p2c1b * dot_x20b_x0p2c1)
+    )
+    Y_b_reg = (z1_sq / (x20_sq * x20b_sq)) * (term1b + term2b)
+
+    term1c = (
+        (z1_sq + one_m_z0_sq) * (1.0 - 2*z0*(1.0 - z0)) *
+        dot_x0c1p2_x0c1p2b * dot_x21_x21b
+    )
+    term2c = -(
+        (one_m_z0_sq - z1_sq) * (2.0*z0 - 1.0) *
+        (dot_x21_x0c1p2 * dot_x21b_x0c1p2b - dot_x21_x0c1p2b * dot_x21b_x0c1p2)
+    )
+    Y_c_reg = (z0_sq / (x21_sq * x21b_sq)) * (term1c + term2c)
+
+    term1d = (z0_sq * z1_sq * z2**2) / one_m_z1_sq
+    term2d = -(
+        (z0_sq * z1**3 * z2) / (1.0 - z1)
+    ) * (dot_x20_x0p2c1 / x20_sq + dot_x20b_x0p2c1b / x20b_sq)
+    term3d = (
+        (z0_sq * z1_x_z2 * one_m_z0_sq) / (1.0 - z1)
+    ) * (dot_x21_x0c1p2 / x21_sq + dot_x21b_x0c1p2b / x21b_sq)
+    Y_d_inst = term1d + term2d + term3d
+
+    term1e = (z0_sq * z1_sq * z2**2) / one_m_z0_sq
+    term2e = (
+        (z0**3 * z1_sq * z2) / (1.0 - z0)
+    ) * (dot_x21_x0c1p2 / x21_sq + dot_x21b_x0c1p2b / x21b_sq)
+    term3e = -(
+        (z0 * z1_sq * z2 * one_m_z1_sq) / (1.0 - z0)
+    ) * (dot_x20_x0p2c1 / x20_sq + dot_x20b_x0p2c1b / x20b_sq)
+    Y_e_inst = term1e + term2e + term3e
+
+    term1bc_pref = -z0_x_z1 * (z0*(1.0 - z1) + z1*(1.0 - z0)) * (z0*(1.0 - z0) + z1*(1.0 - z1))
+    term1bc_prods = (
+        dot_x0c1p2_x0p2c1b * dot_x21_x20b / (x21_sq * x20b_sq) +
+        dot_x0p2c1_x0c1p2b * dot_x20_x21b / (x20_sq * x21b_sq)
+    )
+    term2bc_pref = z0_x_z1 * z2 * (z0 - z1)**2
+    term2bc_prod1 = (
+        (dot_x20_x0p2c1 * dot_x21b_x0c1p2b - dot_x20_x0c1p2b * dot_x21b_x0p2c1) /
+        (x20_sq * x21b_sq)
+    )
+    term2bc_prod2 = (
+        (dot_x21_x0c1p2 * dot_x20b_x0p2c1b - dot_x21_x0p2c1b * dot_x20b_x0c1p2) /
+        (x21_sq * x20b_sq)
+    )
+    Y_bc_interf = term1bc_pref * term1bc_prods + term2bc_pref * (term2bc_prod1 + term2bc_prod2)
+
+    sum_Y_terms = Y_b_reg + Y_c_reg + Y_d_inst + Y_e_inst + Y_bc_interf
+    kin_factor = z0 * z1 * sum_Y_terms
+
     return X012, X012b, Y012, kin_factor
-    
-def GNLOL(Q, Mx, z0, z1, z2, x20, th20, x20b, th20b, x21, th21, x21b, th21b):
-    
+
+# --- VECTORIZED GNLOT ---
+def GNLOT(Q, Mx, z0, z1, z2, x20, th20, x20b, th20b, x21, th21, x21b, th21b):
+
     # All non-Bessel coordinate and kinematic calculations in ONE fused XLA block
-    X012, X012b, Y012, kin_factor = calculate_GNLOL_terms(z0, z1, z2, x20, th20, x20b, th20b, x21, th21, x21b, th21b)
+    X012, X012b, Y012, kin_factor = calculate_GNLOT_terms(z0, z1, z2, x20, th20, x20b, th20b, x21, th21, x21b, th21b)
 
     # Bessel calculation: Mx (1, M) * Y012 (N, 1) -> (N, M)
-    # bessel_k0(Q * X012) -> (N, 1)
-    res_bessel = bessel_k0_xla(Q * X012) * bessel_k0_xla(Q * X012b) * (1.0 / Y012) * bessel_j1_xla(Mx * Y012)
-
+    # bessel_k1(Q * X012) -> (N, 1)
+    res_bessel = (
+        bessel_k1_xla(Q * X012) * bessel_k1_xla(Q * X012b) * (1.0 / (X012 * X012b)) * 
+    (1.0 / Y012) * bessel_j1_xla(Mx * Y012)
+    )
+    
     return res_bessel * kin_factor # Shape: (N, M)
 
 
@@ -267,9 +387,10 @@ def integrand(xx, tfgrid, Csq, x_ref_min, x_ref_max, Mx, Q=2.0, beta=0.1, xpom=0
     )
 
     (s012, s012b) = both_S012s(tfgrid, x_ref_min, x_ref_max, Yqqg, x01, x20, th20, x21, th21, x01b, x20b, th20b, x21b, th21b)
-    
-    # Main calculation
-    term2 = GNLOL(Q, Mx, z0, z1, z2, x20, th20, x20b, th20b, x21, th21, x21b, th21b)
+
+    #tf.print(s012b_ref - s012b_new)
+
+    term2 = GNLOT(Q, Mx, z0, z1, z2, x20, th20, x20b, th20b, x21, th21, x21b, th21b)
     term3 = (1.0 - s012)
     term4 = (1.0 - s012b)
 
@@ -277,7 +398,7 @@ def integrand(xx, tfgrid, Csq, x_ref_min, x_ref_max, Mx, Q=2.0, beta=0.1, xpom=0
 
 # --- VERIFICATION BLOCK ---
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Trip-trip (L) contribution from dipole grid.")
+    parser = argparse.ArgumentParser(description="Trip-trip (T) contribution from dipole grid.")
     # Replace the Q and beta arguments in your current block:
     parser.add_argument("--Q", type=float, default=3.1622, help="Q - Photon virtuality")
     parser.add_argument("--beta", type=float, nargs='+', default=[0.5], help="beta - DIS variable - supply one or more values")
@@ -353,7 +474,9 @@ if __name__ == "__main__":
     CF = 4.0/3.0
     sum_ef_squared = 2.0/3.0 # 4/9 + 1/9 + 1/9 = 2/3
     # Note that prefactor does not contain transverse profile (squared) integral
-    prefactorsL = 8*Nc*CF*Qval**7 * np.sqrt(1.0/betavals - 1.0)/((2*np.pi)**7 * betavals) * sum_ef_squared
+    prefactorsT = Nc*CF*Qval**7 * np.sqrt(1.0/betavals - 1.0)/((2*np.pi)**5 * betavals*2*np.pi**2) * sum_ef_squared
+    
+    
     
     th20=tf.constant(0.0, dtype=tf.float64)
 
@@ -365,8 +488,10 @@ if __name__ == "__main__":
     logrmax = np.log(rmax)
     x_ref_min = tf.constant(np.array([ymin, logrmin]))
     x_ref_max = tf.constant(np.array([ymax, logrmax]))
-    
-    tfgrid = GetYRgrid(dipole_path)
+
+    numpy_grid = GetYRgrid(dipole_path)
+    tfgrid = tf.constant(numpy_grid, dtype = tf.float64)
+    #print(f"Type of tfgrid: {type(tfgrid)}")
     
     n_dim = 9
     
@@ -387,7 +512,7 @@ if __name__ == "__main__":
     print(f"VEGAS MC, npoints={n_events}:")
     start = time.time()
     result = vegas_instance.run_integration(n_iter)
-    result_final = list((list([prefactorsL[n]*elem for n, elem in enumerate(result[i])]) for i in [0,1]))
+    result_final = list((list([prefactorsT[n]*elem for n, elem in enumerate(result[i])]) for i in [0,1]))
     end = time.time()
     print(f"Result of VEGAS: {result_final}")
     print(f"Vegas took: time (s): {end-start}")
@@ -422,8 +547,6 @@ if __name__ == "__main__":
     
         result_path = os.path.join(save_dir, result_filename)
         json_file_path = os.path.join(save_dir, json_filename)
-        
-        
     
         chisqdof=-1.0
         if save_dir != "":

@@ -1,10 +1,10 @@
 # Trip contribution to the diffractive structure function at NLO. Code includes all factors except transverse profile integral.
 #
-# Coupling fixed at parent dipole width.
+# Coupling fixed at smallest dipole width.
 #
-# Geometric mean prescription for alpha_s: sqrt(alphas(x01)*alphas(x01b))
+# alpha_s fixed to smallest dipole width in amplitude only.
 #
-# The "pdgm" in the filename stands for Parent dipole, geometric mean alpha_s prescription.
+# The "sdaw" in the filename stands for the alpha_s prescription: Smallest Dipole, Width from Amplitude.
 #
 # XLA prototype: the whole integrand is one XLA cluster (XLA-compatible Bessel functions) and
 # VegasFlowFastTrain fills the VEGAS grid-training histogram in O(N) and runs each chunk of
@@ -249,8 +249,7 @@ def compute_integrand_preamble(xx, Csq, beta_vec, Q, xpom, Q0sq):
     Wsq = Qsq * (1.0 / (beta_vec * xpom) - 1.0)
     Yqqg = tf.math.log(z2 * (Wsq + Qsq) / Q0sq)
 
-    # Note: alphas(r) must also be XLA-compatible if included here
-    term1 = jac * measure * tf.sqrt(alphas(x01, Csq) * alphas(x01b, Csq))
+    term1 = jac * measure * alphas(tf.math.minimum(x01,tf.math.minimum(x20,x21)), Csq)
 
     return term1, z0, z1, z2, x01, x01b, x20, x20b, th20b, x21, th21, x21b, th21b, Yqqg
 

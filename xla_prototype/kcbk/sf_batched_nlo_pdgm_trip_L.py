@@ -16,6 +16,9 @@ import json
 import math
 import numpy as np
 from scipy.interpolate import RegularGridInterpolator
+import sys
+# The shared modules (vegasflow_improved, xla_bessel_functions) are in the parent folder
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 from vegasflow_improved import VegasFlowImproved
 import tensorflow as tf
 import tensorflow_probability as tfp
@@ -29,13 +32,13 @@ def alphas(r, Csq):
     Nc = 3.0
     Nf = 3.0
     beta = (11.0*Nc - 2.0*Nf)/3.0
+    c = 0.2 # From 2007.01645
+    onebyc = 5.0 
+    mu0 = 2.5*LambdaQCD #From 2007.01645
+    mu0sq = mu0**2
     LambdaQCDsq = LambdaQCD**2
-
-    r_cutoff = (2.0*tnp.sqrt(Csq)/LambdaQCD)*tnp.exp(-42.0*tnp.pi/(7.0*(33-2.0*Nf)));
-
-    rval = tf.minimum(r, r_cutoff)
     
-    return 12*tnp.pi/((33.0 - 2.0*Nf)*tnp.log(4*Csq/(LambdaQCDsq*rval*rval)))
+    return 4*tnp.pi/(beta*tnp.log(((mu0sq/LambdaQCDsq)**onebyc + (4*Csq/(LambdaQCDsq*r*r))**onebyc)**c))
 
 def ReadBKDipole(path_to_file):
     with open(path_to_file) as f:

@@ -406,7 +406,7 @@ if __name__ == "__main__":
     parser.add_argument("--neval", type=float, default=1e6, help="Number of integration points")
     parser.add_argument("--input_grid_path", type=str, default="", help="Path to the pre-trained VEGAS grid (if available)")
     parser.add_argument("--save_dir", type=str, default="", help="Saves result to specified folder")
-    parser.add_argument("--events_limit", type=float, default=1e6, help="Events per VEGAS chunk (memory vs. per-chunk overhead)")
+    parser.add_argument("--events_limit", type=float, default=1e6, help="Tensorflow batch size for VegasFlow")
     parser.add_argument("--seed", type=int, default=None, help="Random seed (default: unseeded, a fresh random stream each run)")
     args = vars(parser.parse_args())
     args["events_limit"] = int(args["events_limit"])
