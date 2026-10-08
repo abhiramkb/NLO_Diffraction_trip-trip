@@ -5,6 +5,9 @@
 # Geometric mean prescription for alpha_s: sqrt(alphas(x01)*alphas(x01b))
 #
 # The "pdgm" in the filename stands for Parent dipole, geometric mean alpha_s prescription.
+#
+# XLA prototype: the whole integrand is one XLA cluster (XLA-compatible Bessel functions) and
+# the VEGAS grid-training histogram is filled in O(N) (VegasFlowFastTrain).
 import time
 import os
 import subprocess
@@ -19,21 +22,19 @@ from tensorflow.experimental import numpy as tnp #Use tnp instead of numpy
 import argparse
 
 @tf.function(jit_compile=True)
-def alphas(r):
-
+def alphas(r, Csq):
     LambdaQCD = 0.241
     Nc = 3.0
     Nf = 3.0
     beta = (11.0*Nc - 2.0*Nf)/3.0
-    Csq = 663.0
-    c = 0.2 # From 2007.01645
-    onebyc = 5.0 
-    mu0 = 2.5*LambdaQCD #From 2007.01645
-    mu0sq = mu0**2
     LambdaQCDsq = LambdaQCD**2
-    
-    return 4*tnp.pi/(beta*tnp.log(((mu0sq/LambdaQCDsq)**onebyc + (4*Csq/(LambdaQCDsq*r*r))**onebyc)**c))
 
+    r_cutoff = (2.0*tnp.sqrt(Csq)/LambdaQCD)*tnp.exp(-42.0*tnp.pi/(7.0*(33-2.0*Nf)));
+
+    rval = tf.minimum(r, r_cutoff)
+    
+    return 12*tnp.pi/((33.0 - 2.0*Nf)*tnp.log(4*Csq/(LambdaQCDsq*rval*rval)))
+    
 def ReadBKDipole(path_to_file):
     with open(path_to_file) as f:
         content = f.read().split("###")
@@ -121,6 +122,93 @@ def GetYRgrid(path_to_file):
 
     NrY_data = np.array(NrY_data)
     return NrY_data[:,1:]
+
+# --- XLA-compatible Bessel functions ---
+# tf.math.special.bessel_k0/k1/j1 have no XLA kernel. These are ports of the double-precision
+# Cephes implementations that tf.math.special uses (Eigen, unsupported/Eigen/src/SpecialFunctions/
+# BesselFunctionsImpl.h), with the same coefficients. As in Eigen, both branches are evaluated
+# and selected with tf.where; the inputs of each branch are clamped so the unused one stays finite.
+
+def _chbevl(x, coef):
+    # Clenshaw recurrence for a Chebyshev series (Eigen's pchebevl)
+    b0 = coef[0]
+    b1 = 0.0
+    b2 = 0.0
+    for c in coef[1:]:
+        b2 = b1
+        b1 = b0
+        b0 = x * b1 - b2 + c
+    return 0.5 * (b0 - b2)
+
+def _polevl(x, coef):
+    # Horner scheme, coef[0] is the highest-degree coefficient (Eigen's ppolevl)
+    p = coef[0]
+    for c in coef[1:]:
+        p = p * x + c
+    return p
+
+_K1_A = [-7.02386347938628759343E-18, -2.42744985051936593393E-15, -6.66690169419932900609E-13,
+         -1.41148839263352776110E-10, -2.21338763073472585583E-8,  -2.43340614156596823496E-6,
+         -1.73028895751305206302E-4,  -6.97572385963986435018E-3,  -1.22611180822657148235E-1,
+         -3.53155960776544875667E-1,  1.52530022733894777053E0]
+_K1_B = [-5.75674448366501715755E-18, 1.79405087314755922667E-17,  -5.68946255844285935196E-17,
+         1.83809354436663880070E-16,  -6.05704724837331885336E-16, 2.03870316562433424052E-15,
+         -7.01983709041831346144E-15, 2.47715442448130437068E-14,  -8.97670518232499435011E-14,
+         3.34841966607842919884E-13,  -1.28917396095102890680E-12, 5.13963967348173025100E-12,
+         -2.12996783842756842877E-11, 9.21831518760500529508E-11,  -4.19035475934189648750E-10,
+         2.01504975519703286596E-9,   -1.03457624656780970260E-8,  5.74108412545004946722E-8,
+         -3.50196060308781257119E-7,  2.40648494783721712015E-6,   -1.93619797416608296024E-5,
+         1.95215518471351631108E-4,   -2.85781685962277938680E-3,  1.03923736576817238437E-1,
+         2.72062619048444266945E0]
+
+def bessel_k1_xla(x):
+    x_le = tf.minimum(x, 2.0)
+    x_gt = tf.maximum(x, 2.0)
+    # x <= 2: K1(x) = log(x/2) I1(x) + chbevl(x^2 - 2, A)/x
+    k_le = _chbevl(x_le * x_le - 2.0, _K1_A) / x_le + tf.math.bessel_i1e(x_le) * tf.exp(x_le) * tf.math.log(0.5 * x_le)
+    k_le = tf.where(x <= 0.0, tf.constant(np.inf, dtype=x.dtype), k_le)
+    # x > 2: K1(x) = exp(-x) chbevl(8/x - 2, B)/sqrt(x)
+    k_gt = tf.exp(-x_gt) * (_chbevl(8.0 / x_gt - 2.0, _K1_B) * tf.math.rsqrt(x_gt))
+    return tf.where(x <= 2.0, k_le, k_gt)
+
+_J1_PP = [7.62125616208173112003E-4, 7.31397056940917570436E-2, 1.12719608129684925192E0,
+          5.11207951146807644818E0,  8.42404590141772420927E0,  5.21451598682361504063E0,
+          1.00000000000000000254E0]
+_J1_PQ = [5.71323128072548699714E-4, 6.88455908754495404082E-2, 1.10514232634061696926E0,
+          5.07386386128601488557E0,  8.39985554327604159757E0,  5.20982848682361821619E0,
+          9.99999999999999997461E-1]
+_J1_QP = [5.10862594750176621635E-2, 4.98213872951233449420E0, 7.58238284132545283818E1,
+          3.66779609360150777800E2,  7.10856304998926107277E2, 5.97489612400613639965E2,
+          2.11688757100572135698E2,  2.52070205858023719784E1]
+_J1_QQ = [1.00000000000000000000E0, 7.42373277035675149943E1, 1.05644886038262816351E3,
+          4.98641058337653607651E3, 9.56231892404756170795E3, 7.99704160447350683650E3,
+          2.82619278517639096600E3, 3.36093607810698293419E2]
+_J1_RP = [-8.99971225705559398224E8, 4.52228297998194034323E11, -7.27494245221818276015E13,
+          3.68295732863852883286E15]
+_J1_RQ = [1.00000000000000000000E0,  6.20836478118054335476E2,  2.56987256757748830383E5,
+          8.35146791431949253037E7,  2.21511595479792499675E10, 4.74914122079991414898E12,
+          7.84369607876235854894E14, 8.95222336184627338078E16, 5.32278620332680085395E18]
+_J1_Z1 = 1.46819706421238932572E1
+_J1_Z2 = 4.92184563216946036703E1
+_J1_SQ2OPI = 7.9788456080286535587989E-1 # sqrt(2/pi)
+_J1_NEG_THPIO4 = -2.35619449019234492885 # -3pi/4
+
+def bessel_j1_xla(x):
+    y = tf.abs(x)
+    y_gt = tf.maximum(y, 5.0)
+    # |x| <= 5: rational approximation in z = x^2
+    x_le = tf.clip_by_value(x, -5.0, 5.0)
+    z = x_le * x_le
+    j_le = (_polevl(z, _J1_RP) / _polevl(z, _J1_RQ)) * x_le * (z - _J1_Z1) * (z - _J1_Z2)
+    # |x| > 5: asymptotic form (J1 is odd)
+    s = 25.0 / (y_gt * y_gt)
+    p = _polevl(s, _J1_PP) / _polevl(s, _J1_PQ)
+    q = _polevl(s, _J1_QP) / _polevl(s, _J1_QQ)
+    yn = y_gt + _J1_NEG_THPIO4
+    p = p * tf.cos(yn) + (-5.0 / y_gt) * (q * tf.sin(yn))
+    j_gt = p * (_J1_SQ2OPI * tf.math.rsqrt(y_gt))
+    j_gt = tf.where(x < 0.0, -j_gt, j_gt)
+    return tf.where(y <= 5.0, j_le, j_gt)
 
 @tf.function(jit_compile=True)
 def calculate_GNLOT_terms(z0, z1, z2, x20, th20, x20b, th20b, x21, th21, x21b, th21b):
@@ -280,48 +368,12 @@ def GNLOT(Q, Mx, z0, z1, z2, x20, th20, x20b, th20b, x21, th21, x21b, th21b):
     # Bessel calculation: Mx (1, M) * Y012 (N, 1) -> (N, M)
     # bessel_k1(Q * X012) -> (N, 1)
     res_bessel = (
-        tf.math.special.bessel_k1(Q * X012) * tf.math.special.bessel_k1(Q * X012b) * (1.0 / (X012 * X012b)) * 
-    (1.0 / Y012) * tf.math.special.bessel_j1(Mx * Y012)
+        bessel_k1_xla(Q * X012) * bessel_k1_xla(Q * X012b) * (1.0 / (X012 * X012b)) * 
+    (1.0 / Y012) * bessel_j1_xla(Mx * Y012)
     )
     
     return res_bessel * kin_factor # Shape: (N, M)
 
-
-@tf.function(jit_compile=True)
-def S012(tfgrid, x_ref_min, x_ref_max, Y, x10, x20, th20, x21, th21):
-    # Y is (N, M), coordinates are (N, 1)
-    Nc = 3.0
-    CF = 4.0/3.0
-    #x10 = tf.sqrt(x20**2 + x21**2 - 2.0 * x20 * x21 * tf.cos(th20 - th21))
-
-    shape_N_M = tf.shape(Y)
-
-  # Broadcast coordinates to (N, M)
-    log_x20 = tf.broadcast_to(tf.math.log(x20), shape_N_M)
-    log_x21 = tf.broadcast_to(tf.math.log(x21), shape_N_M)
-    log_x10 = tf.broadcast_to(tf.math.log(x10), shape_N_M)
-
-    # Stack into (3, N, M, 2)
-    s0 = tf.stack([Y, log_x20], axis=-1)
-    s1 = tf.stack([Y, log_x21], axis=-1)
-    s2 = tf.stack([Y, log_x10], axis=-1)
-    coords = tf.stack([s0, s1, s2], axis=0) # Shape: (3, N, M, 2)
-    # --- THE FIX: FLATTEN ---
-    # Collapse (3, N, M) into a single batch dimension
-    flat_coords = tf.reshape(coords, [-1, 2]) # Shape: (TotalPoints, 2)
-
-    # Interpolate using the flattened coordinates
-    # Because flat_coords is rank-2, tfp won't try to broadcast the grid
-    flat_Nvals = tfp.math.batch_interp_regular_nd_grid(
-        flat_coords, x_ref_min, x_ref_max, tfgrid,  axis=-2,
-        fill_value='constant_extension'
-    )
-
-    # Reshape back to (3, N, M)
-    Nvals = tf.reshape(flat_Nvals, [3, shape_N_M[0], shape_N_M[1]])
-
-    Svals = 1.0 - Nvals
-    return (Nc / (2.0 * CF)) * (Svals[0] * Svals[1] - (1.0 / Nc**2) * Svals[2])
 
 @tf.function(jit_compile=True)
 def both_S012s(tfgrid, x_ref_min, x_ref_max, Y, x10, x20, th20, x21, th21, x10b, x20b, th20b, x21b, th21b):
@@ -369,7 +421,7 @@ def both_S012s(tfgrid, x_ref_min, x_ref_max, Y, x10, x20, th20, x21, th21, x10b,
     return S012, S012b
 
 @tf.function(jit_compile=True)
-def compute_integrand_preamble(xx, beta_vec, Q, xpom, Q0sq):
+def compute_integrand_preamble(xx, Csq, beta_vec, Q, xpom, Q0sq):
     """
     Computes coordinate transformations, kinematics, Yqqg, and term1 in XLA.
     Outputs:
@@ -400,12 +452,12 @@ def compute_integrand_preamble(xx, beta_vec, Q, xpom, Q0sq):
     Yqqg = tf.math.log(z2 * (Wsq + Qsq) / Q0sq)
 
     # Note: alphas(r) must also be XLA-compatible if included here
-    term1 = jac * measure * tf.sqrt(alphas(x01) * alphas(x01b))
+    term1 = jac * measure * tf.sqrt(alphas(x01, Csq) * alphas(x01b, Csq))
 
     return term1, z0, z1, z2, x01, x01b, x20, x20b, th20b, x21, th21, x21b, th21b, Yqqg
 
-@tf.function
-def integrand(xx, tfgrid, x_ref_min, x_ref_max, Mx, Q=2.0, beta=0.1, xpom=0.01):
+@tf.function(jit_compile=True)
+def integrand(xx, tfgrid, Csq, x_ref_min, x_ref_max, Mx, Q=2.0, beta=0.1, xpom=0.01):
     beta_vec = tf.reshape(beta, (1, -1)) # Shape: (1, M)
     Q0sq = 1.0
     th20 = 0.0
@@ -413,20 +465,43 @@ def integrand(xx, tfgrid, x_ref_min, x_ref_max, Mx, Q=2.0, beta=0.1, xpom=0.01):
     # 1. Accelerated Preamble (XLA JIT)
     (term1, z0, z1, z2, x01, x01b, x20, x20b, 
      th20b, x21, th21, x21b, th21b, Yqqg) = compute_integrand_preamble(
-        xx, beta_vec, Q, xpom, Q0sq
+        xx, Csq, beta_vec, Q, xpom, Q0sq
     )
 
     (s012, s012b) = both_S012s(tfgrid, x_ref_min, x_ref_max, Yqqg, x01, x20, th20, x21, th21, x01b, x20b, th20b, x21b, th21b)
 
     #tf.print(s012b_ref - s012b_new)
 
-    # 2. Main Physics Kernels
-    # Note: Pass z2 to GNLOT so it doesn't recompute `1.0 - z0 - z1`
     term2 = GNLOT(Q, Mx, z0, z1, z2, x20, th20, x20b, th20b, x21, th21, x21b, th21b)
     term3 = (1.0 - s012)
     term4 = (1.0 - s012b)
 
     return term1 * (term2 * (term3 * term4)) # Result: (N, M)
+
+# --- VEGAS grid training ---
+class VegasFlowFastTrain(VegasFlow):
+    """VegasFlow with an O(N) fill of the grid-training histogram.
+
+    VegasFlow sums (w f)^2 per bin with a dense (bins x N) one-hot mask for every dimension
+    (vegasflow.utils.consume_array_into_indices). Here all dimensions are filled with one
+    segment sum over flattened (dimension, bin) indices. Same histogram up to summation order."""
+    def _can_run_vectorial(self, expected_shape):
+        # VegasFlow accepts vectorial (batched beta) integrands only when the class is named exactly
+        # "VegasFlow". The histogram fill below receives only the main dimension, as in VegasFlow.
+        super()._can_run_vectorial(expected_shape) # keeps the main_dimension range check
+        return True
+
+    def _importance_sampling_array_filling(self, results2, indices):
+        if not self.train:
+            return []
+
+        n_bins = self.grid_bins - 1
+        # indices: (N, n_dim) bin of each event in each dimension -> segment id dim*n_bins + bin
+        segment_ids = indices + n_bins * tf.range(self.n_dim, dtype=indices.dtype)
+        data = tf.broadcast_to(tf.expand_dims(results2, -1), tf.shape(indices))
+        arr_res2 = tf.math.unsorted_segment_sum(data, segment_ids, self.n_dim * n_bins)
+
+        return tf.reshape(arr_res2, (self.n_dim, n_bins))
 
 # --- VERIFICATION BLOCK ---
 if __name__ == "__main__":
@@ -437,6 +512,7 @@ if __name__ == "__main__":
     parser.add_argument("--x", type=float, default=0.01, help="xpom - Pomeron-x")
     parser.add_argument("--xmax", type=float, default=40.0, help="xmax (upper integration bound for |x_ij|)")
     parser.add_argument("--dipole_path", type=str, required=True, help="Path to the BK table")
+    parser.add_argument("--Csq", type=float, required=True, help="Csq - alpha_s parameter associated with dipole grid")
     parser.add_argument("--neval", type=float, default=1e6, help="Number of integration points")
     parser.add_argument("--input_grid_path", type=str, default="", help="Path to the pre-trained VEGAS grid (if available)")
     parser.add_argument("--save_dir", type=str, default="", help="Saves result to specified folder")
@@ -473,6 +549,7 @@ if __name__ == "__main__":
     betavals = np.array(args["beta"]) #Array of beta values for simultaneous processing
     xpomval = args["x"]
     xmaxval = args["xmax"]
+    Csqval = args["Csq"]
 
     print(f"Processing beta value(s): {betavals}")
     
@@ -480,6 +557,7 @@ if __name__ == "__main__":
     beta_list=tf.constant(args["beta"], dtype=tf.float64)
     xpom=tf.constant(args["x"], dtype=tf.float64)
     xmax=tf.constant(args["xmax"], dtype=tf.float64)
+    Csq=tf.constant(args["Csq"], dtype=tf.float64)
     n_events = int(args["neval"])
 
     beta_vec = tf.reshape(beta_list, (1, -1))       # (1, M)
@@ -525,9 +603,9 @@ if __name__ == "__main__":
 
     main_dimension = 0 #main dimension not provided as argument. Supply beta value for main dimension first
 
-    vegas_instance = VegasFlow(n_dim, n_events, xmin=[0, 0, 0, 0, 0, 0, 0, 0, 0], xmax=[1, 1, xmax, xmax, 2.0*np.pi, xmax, 2.0*np.pi, xmax, 2.0*np.pi],main_dimension = main_dimension)
+    vegas_instance = VegasFlowFastTrain(n_dim, n_events, xmin=[0, 0, 0, 0, 0, 0, 0, 0, 0], xmax=[1, 1, xmax, xmax, 2.0*np.pi, xmax, 2.0*np.pi, xmax, 2.0*np.pi],main_dimension = main_dimension)
 
-    integrand_vegasflow = lambda xx: integrand(xx,tfgrid,x_ref_min,x_ref_max,Mx_const,Q=Q,beta=beta_list,xpom=xpom)
+    integrand_vegasflow = lambda xx: integrand(xx,tfgrid,Csq,x_ref_min,x_ref_max,Mx_const,Q=Q,beta=beta_list,xpom=xpom)
     
     vegas_instance.compile(integrand_vegasflow)
 
@@ -548,7 +626,7 @@ if __name__ == "__main__":
     for n, beta in enumerate(betavals):
         # --- Organize data into dictionaries ---
         # Input parameters
-        param_keys = ["Q", "x", "xmax", "neval", "dipole_path"]
+        param_keys = ["Q", "x", "xmax", "neval", "dipole_path", "Csq"]
         params = {k: args[k] for k in param_keys}
         params["beta"] = beta
 

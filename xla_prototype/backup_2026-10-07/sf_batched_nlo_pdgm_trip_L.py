@@ -7,8 +7,7 @@
 # The "pdgm" in the filename stands for Parent dipole, geometric mean alpha_s prescription.
 #
 # XLA prototype: the whole integrand is one XLA cluster (XLA-compatible Bessel functions) and
-# VegasFlowImproved fills the VEGAS grid-training histogram in O(N) and runs each chunk of
-# events (random numbers, grid mapping, integrand, sums) as one XLA cluster.
+# the VEGAS grid-training histogram is filled in O(N) (VegasFlowFastTrain).
 import time
 import os
 import subprocess
@@ -16,15 +15,11 @@ import json
 import math
 import numpy as np
 from scipy.interpolate import RegularGridInterpolator
-import sys
-# The shared modules (vegasflow_improved, xla_bessel_functions) are in the parent folder
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
-from vegasflow_improved import VegasFlowImproved
+from vegasflow import VegasFlow
 import tensorflow as tf
 import tensorflow_probability as tfp
 from tensorflow.experimental import numpy as tnp #Use tnp instead of numpy
 import argparse
-from xla_bessel_functions import bessel_k1_xla, bessel_j1_xla
 
 @tf.function(jit_compile=True)
 def alphas(r, Csq):
@@ -32,14 +27,14 @@ def alphas(r, Csq):
     Nc = 3.0
     Nf = 3.0
     beta = (11.0*Nc - 2.0*Nf)/3.0
-    c = 0.2 # From 2007.01645
-    onebyc = 5.0 
-    mu0 = 2.5*LambdaQCD #From 2007.01645
-    mu0sq = mu0**2
     LambdaQCDsq = LambdaQCD**2
+
+    r_cutoff = (2.0*tnp.sqrt(Csq)/LambdaQCD)*tnp.exp(-42.0*tnp.pi/(7.0*(33-2.0*Nf)));
+
+    rval = tf.minimum(r, r_cutoff)
     
-    return 4*tnp.pi/(beta*tnp.log(((mu0sq/LambdaQCDsq)**onebyc + (4*Csq/(LambdaQCDsq*r*r))**onebyc)**c))
-    
+    return 12*tnp.pi/((33.0 - 2.0*Nf)*tnp.log(4*Csq/(LambdaQCDsq*rval*rval)))
+
 def ReadBKDipole(path_to_file):
     with open(path_to_file) as f:
         content = f.read().split("###")
@@ -128,168 +123,138 @@ def GetYRgrid(path_to_file):
     NrY_data = np.array(NrY_data)
     return NrY_data[:,1:]
 
+# --- XLA-compatible Bessel functions ---
+# tf.math.special.bessel_k0/k1/j1 have no XLA kernel. These are ports of the double-precision
+# Cephes implementations that tf.math.special uses (Eigen, unsupported/Eigen/src/SpecialFunctions/
+# BesselFunctionsImpl.h), with the same coefficients. As in Eigen, both branches are evaluated
+# and selected with tf.where; the inputs of each branch are clamped so the unused one stays finite.
+
+def _chbevl(x, coef):
+    # Clenshaw recurrence for a Chebyshev series (Eigen's pchebevl)
+    b0 = coef[0]
+    b1 = 0.0
+    b2 = 0.0
+    for c in coef[1:]:
+        b2 = b1
+        b1 = b0
+        b0 = x * b1 - b2 + c
+    return 0.5 * (b0 - b2)
+
+def _polevl(x, coef):
+    # Horner scheme, coef[0] is the highest-degree coefficient (Eigen's ppolevl)
+    p = coef[0]
+    for c in coef[1:]:
+        p = p * x + c
+    return p
+
+_K0_A = [1.37446543561352307156E-16, 4.25981614279661018399E-14, 1.03496952576338420167E-11,
+         1.90451637722020886025E-9,  2.53479107902614945675E-7,  2.28621210311945178607E-5,
+         1.26461541144692592338E-3,  3.59799365153615016266E-2,  3.44289899924628486886E-1,
+         -5.35327393233902768720E-1]
+_K0_B = [5.30043377268626276149E-18,  -1.64758043015242134646E-17, 5.21039150503902756861E-17,
+         -1.67823109680541210385E-16, 5.51205597852431940784E-16,  -1.84859337734377901440E-15,
+         6.34007647740507060557E-15,  -2.22751332699166985548E-14, 8.03289077536357521100E-14,
+         -2.98009692317273043925E-13, 1.14034058820847496303E-12,  -4.51459788337394416547E-12,
+         1.85594911495471785253E-11,  -7.95748924447710747776E-11, 3.57739728140030116597E-10,
+         -1.69753450938905987466E-9,  8.57403401741422608519E-9,   -4.66048989768794782956E-8,
+         2.76681363944501510342E-7,   -1.83175552271911948767E-6,  1.39498137188764993662E-5,
+         -1.28495495816278026384E-4,  1.56988388573005337491E-3,   -3.14481013119645005427E-2,
+         2.44030308206595545468E0]
+
+def bessel_k0_xla(x):
+    x_le = tf.minimum(x, 2.0)
+    x_gt = tf.maximum(x, 2.0)
+    # x <= 2: K0(x) = chbevl(x^2 - 2, A) - log(x/2) I0(x)
+    k_le = _chbevl(x_le * x_le - 2.0, _K0_A) - tf.math.bessel_i0e(x_le) * tf.exp(x_le) * tf.math.log(0.5 * x_le)
+    k_le = tf.where(x <= 0.0, tf.constant(np.inf, dtype=x.dtype), k_le)
+    # x > 2: K0(x) = exp(-x) chbevl(8/x - 2, B)/sqrt(x)
+    k_gt = (tf.exp(-x_gt) * _chbevl(8.0 / x_gt - 2.0, _K0_B)) * tf.math.rsqrt(x_gt)
+    return tf.where(x <= 2.0, k_le, k_gt)
+
+_J1_PP = [7.62125616208173112003E-4, 7.31397056940917570436E-2, 1.12719608129684925192E0,
+          5.11207951146807644818E0,  8.42404590141772420927E0,  5.21451598682361504063E0,
+          1.00000000000000000254E0]
+_J1_PQ = [5.71323128072548699714E-4, 6.88455908754495404082E-2, 1.10514232634061696926E0,
+          5.07386386128601488557E0,  8.39985554327604159757E0,  5.20982848682361821619E0,
+          9.99999999999999997461E-1]
+_J1_QP = [5.10862594750176621635E-2, 4.98213872951233449420E0, 7.58238284132545283818E1,
+          3.66779609360150777800E2,  7.10856304998926107277E2, 5.97489612400613639965E2,
+          2.11688757100572135698E2,  2.52070205858023719784E1]
+_J1_QQ = [1.00000000000000000000E0, 7.42373277035675149943E1, 1.05644886038262816351E3,
+          4.98641058337653607651E3, 9.56231892404756170795E3, 7.99704160447350683650E3,
+          2.82619278517639096600E3, 3.36093607810698293419E2]
+_J1_RP = [-8.99971225705559398224E8, 4.52228297998194034323E11, -7.27494245221818276015E13,
+          3.68295732863852883286E15]
+_J1_RQ = [1.00000000000000000000E0,  6.20836478118054335476E2,  2.56987256757748830383E5,
+          8.35146791431949253037E7,  2.21511595479792499675E10, 4.74914122079991414898E12,
+          7.84369607876235854894E14, 8.95222336184627338078E16, 5.32278620332680085395E18]
+_J1_Z1 = 1.46819706421238932572E1
+_J1_Z2 = 4.92184563216946036703E1
+_J1_SQ2OPI = 7.9788456080286535587989E-1 # sqrt(2/pi)
+_J1_NEG_THPIO4 = -2.35619449019234492885 # -3pi/4
+
+def bessel_j1_xla(x):
+    y = tf.abs(x)
+    y_gt = tf.maximum(y, 5.0)
+    # |x| <= 5: rational approximation in z = x^2
+    x_le = tf.clip_by_value(x, -5.0, 5.0)
+    z = x_le * x_le
+    j_le = (_polevl(z, _J1_RP) / _polevl(z, _J1_RQ)) * x_le * (z - _J1_Z1) * (z - _J1_Z2)
+    # |x| > 5: asymptotic form (J1 is odd)
+    s = 25.0 / (y_gt * y_gt)
+    p = _polevl(s, _J1_PP) / _polevl(s, _J1_PQ)
+    q = _polevl(s, _J1_QP) / _polevl(s, _J1_QQ)
+    yn = y_gt + _J1_NEG_THPIO4
+    p = p * tf.cos(yn) + (-5.0 / y_gt) * (q * tf.sin(yn))
+    j_gt = p * (_J1_SQ2OPI * tf.math.rsqrt(y_gt))
+    j_gt = tf.where(x < 0.0, -j_gt, j_gt)
+    return tf.where(y <= 5.0, j_le, j_gt)
+
 @tf.function(jit_compile=True)
-def calculate_GNLOT_terms(z0, z1, z2, x20, th20, x20b, th20b, x21, th21, x21b, th21b):
-    """
-    Computes sum_Y_terms, X012, X012b and Y012 with XLA JIT compilation enabled.
-    Inputs are expected to have shape (N, 1).
-    """
-    cos_th20_m_th20b = tf.cos(th20 - th20b)
-    cos_th21_m_th21b = tf.cos(th21 - th21b)
-    cos_th20_m_th21b = tf.cos(th20 - th21b)
-    cos_th21_m_th20b = tf.cos(th21 - th20b)
-    cos_th20_m_th21 = tf.cos(th20 - th21)
-    cos_th20b_m_th21b = tf.cos(th20b - th21b)
-    
-    # Basic dot products
-    dot_x20_x20b = x20 * x20b * cos_th20_m_th20b
-    dot_x21_x21b = x21 * x21b * cos_th21_m_th21b
-    dot_x20_x21b = x20 * x21b * cos_th20_m_th21b
-    dot_x21_x20b = x21 * x20b * cos_th21_m_th20b
-    dot_x20_x21 = x20 * x21 * cos_th20_m_th21
-    dot_x20b_x21b = x20b * x21b * cos_th20b_m_th21b
+def calculate_GNLOL_terms(z0, z1, z2, x20, th20, x20b, th20b, x21, th21, x21b, th21b):
 
-    inv_1m_z1 = 1.0 / (1.0 - z1)
-    inv_1m_z0 = 1.0 / (1.0 - z0)
-    z0_over_1m_z1 = z0 * inv_1m_z1
-    z1_over_1m_z0 = z1 * inv_1m_z0
+    # Cosines of the angle differences, each evaluated once (cos is even)
+    cos_th21_m_th20 = tf.cos(th21 - th20)
+    cos_th21b_m_th20b = tf.cos(th21b - th20b)
+    cos_th21b_m_th21 = tf.cos(th21b - th21)
+    cos_th21b_m_th20 = tf.cos(th21b - th20)
+    cos_th20b_m_th21 = tf.cos(th20b - th21)
+    cos_th20b_m_th20 = tf.cos(th20b - th20)
 
-    one_m_z1_sq = (1.0 - z1)**2
-    one_m_z0_sq = (1.0 - z0)**2
+    # Coordinate-only terms are (N, 1)
+    X012 = tf.sqrt(z0 * z1 * (x21**2 + x20**2 - 2*x21*x20*cos_th21_m_th20) + z0 * z2 * x20**2 + z1 * z2 * x21**2)
+    X012b = tf.sqrt(z0 * z1 * (x21b**2 + x20b**2 - 2*x21b*x20b*cos_th21b_m_th20b) + z0 * z2 * x20b**2 + z1 * z2 * x21b**2)
 
-    z0_sq = z0**2
-    z1_sq = z1**2
-
-    z0_x_z1 = z0 * z1 
-    z0_x_z2 = z0 * z2
-    z1_x_z2 = z1 * z2
-
-    x20_sq = x20**2
-    x21_sq = x21**2
-    x20b_sq = x20b**2
-    x21b_sq = x21b**2
-
-    X012 = tf.sqrt(z0_x_z1 * (x21_sq + x20_sq - 2*dot_x20_x21) + z0_x_z2 * x20_sq + z1_x_z2 * x21_sq)
-    X012b = tf.sqrt(z0_x_z1 * (x21b_sq + x20b_sq - 2*dot_x20b_x21b) + z0_x_z2 * x20b_sq + z1_x_z2 * x21b_sq)
-
-    Y012_part1 = (z0_x_z1 * (x21b_sq + x20b_sq - 2*dot_x20b_x21b + x21_sq + x20_sq - 2*dot_x20_x21 - 2*dot_x21_x21b + 2*dot_x20_x21b + 2*dot_x21_x20b - 2*dot_x20_x20b))
-    Y012_part2 = (z0_x_z2 * (x20b_sq + x20_sq - 2*dot_x20_x20b))
-    Y012_part3 = (z1_x_z2 * (x21b_sq + x21_sq - 2*dot_x21_x21b))
+    Y012_part1 = (z0 * z1 * (x21b**2 + x20b**2 - 2*x21b*x20b*cos_th21b_m_th20b + x21**2 + x20**2 - 2*x21*x20*cos_th21_m_th20 - 2*x21b*x21*cos_th21b_m_th21 + 2*x21b*x20*cos_th21b_m_th20 + 2*x20b*x21*cos_th20b_m_th21 - 2*x20b*x20*cos_th20b_m_th20))
+    Y012_part2 = (z0 * z2 * (x20b**2 + x20**2 - 2*x20b*x20*cos_th20b_m_th20))
+    Y012_part3 = (z1 * z2 * (x21b**2 + x21**2 - 2*x21b*x21*cos_th21b_m_th21))
     Y012 = tf.sqrt(Y012_part1 + Y012_part2 + Y012_part3) # Shape: (N, 1)
 
-    
-    
-    # Composite dot products from (29)
-    dot_x20_x0p2c1 = dot_x20_x21 - z0_over_1m_z1 * x20_sq
-    dot_x20b_x0p2c1b = dot_x20b_x21b - z0_over_1m_z1 * x20b_sq
-    dot_x20b_x0p2c1 = dot_x21_x20b - z0_over_1m_z1 * dot_x20_x20b
-    dot_x20_x0p2c1b = dot_x20_x21b - z0_over_1m_z1 * dot_x20_x20b
-    dot_x0p2c1_x0p2c1b = (
-        dot_x21_x21b -
-        z0_over_1m_z1 * (dot_x21_x20b + dot_x20_x21b) +
-        (z0_sq/one_m_z1_sq) * dot_x20_x20b
-    )
+    dot_x20_x20b = x20 * x20b * cos_th20b_m_th20
+    dot_x21_x21b = x21 * x21b * cos_th21b_m_th21
+    dot_x20_x21b = x20 * x21b * cos_th21b_m_th20
+    dot_x21_x20b = x21 * x20b * cos_th20b_m_th21
 
-    # Composite dot products from (30)
-    dot_x21_x0c1p2 = z1_over_1m_z0 * x21_sq - dot_x20_x21
-    dot_x21_x0c1p2b = z1_over_1m_z0 * dot_x21_x21b - dot_x21_x20b
-    dot_x21b_x0c1p2 = z1_over_1m_z0 * dot_x21_x21b - dot_x20_x21b
-    dot_x21b_x0c1p2b = z1_over_1m_z0 * x21b_sq - dot_x20b_x21b
-    dot_x0c1p2_x0c1p2b = (
-        dot_x20_x20b -
-        z1_over_1m_z0 * (dot_x21_x20b + dot_x20_x21b) +
-        z1_over_1m_z0**2 * dot_x21_x21b
-    )
+    epsilon = 1e-14
 
-    # Composite dot products from (33)
-    dot_x0p2c1_x0c1p2b = (
-        z1_over_1m_z0 * dot_x21_x21b - dot_x21_x20b -
-        (z0_x_z1/((1.0 - z0)*(1.0 - z1))) * dot_x20_x21b +
-        z0_over_1m_z1 * dot_x20_x20b
+    # Kinematic factor (N, 1)
+    kin_factor = z0 * z1 * (
+        z1**2*(2.0*z0*(1.0 - z1) + z2**2)*dot_x20_x20b/((x20**2 + epsilon) * (x20b**2 + epsilon))
+        + z0**2*(2.0*z1*(1.0 - z0) + z2**2)*dot_x21_x21b/((x21**2 + epsilon) * (x21b**2 + epsilon))
+        - z0*z1*(z0*(1.0 - z0) + z1*(1.0 - z1))*(dot_x20_x21b/((x20**2 + epsilon) * (x21b**2 + epsilon)) + dot_x21_x20b/((x21**2 + epsilon) * (x20b**2 + epsilon)))
     )
-    dot_x0c1p2_x0p2c1b = (
-        z1_over_1m_z0 * dot_x21_x21b - dot_x20_x21b -
-        (z0_x_z1/((1.0 - z0)*(1.0 - z1))) * dot_x21_x20b +
-        z0_over_1m_z1 * dot_x20_x20b
-    )
-    dot_x20_x0c1p2b = z1_over_1m_z0 * dot_x20_x21b - dot_x20_x20b
-    dot_x21b_x0p2c1 = dot_x21_x21b - z0_over_1m_z1 * dot_x20_x21b
-    dot_x20b_x0c1p2 = z1_over_1m_z0 * dot_x21_x20b - dot_x20_x20b
-    dot_x21_x0p2c1b = dot_x21_x21b - z0_over_1m_z1 * dot_x21_x20b
-
-    # Coefficient functions from Eqs. (29)–(33)
-    term1b = (
-        (z0_sq + one_m_z1_sq) * (1.0 - 2*z1*(1.0 - z1)) *
-        dot_x0p2c1_x0p2c1b * dot_x20_x20b
-    )
-    term2b = -(
-        (one_m_z1_sq - z0_sq) * (2.0*z1 - 1.0) *
-        (dot_x20_x0p2c1 * dot_x20b_x0p2c1b - dot_x20_x0p2c1b * dot_x20b_x0p2c1)
-    )
-    Y_b_reg = (z1_sq / (x20_sq * x20b_sq)) * (term1b + term2b)
-
-    term1c = (
-        (z1_sq + one_m_z0_sq) * (1.0 - 2*z0*(1.0 - z0)) *
-        dot_x0c1p2_x0c1p2b * dot_x21_x21b
-    )
-    term2c = -(
-        (one_m_z0_sq - z1_sq) * (2.0*z0 - 1.0) *
-        (dot_x21_x0c1p2 * dot_x21b_x0c1p2b - dot_x21_x0c1p2b * dot_x21b_x0c1p2)
-    )
-    Y_c_reg = (z0_sq / (x21_sq * x21b_sq)) * (term1c + term2c)
-
-    term1d = (z0_sq * z1_sq * z2**2) / one_m_z1_sq
-    term2d = -(
-        (z0_sq * z1**3 * z2) / (1.0 - z1)
-    ) * (dot_x20_x0p2c1 / x20_sq + dot_x20b_x0p2c1b / x20b_sq)
-    term3d = (
-        (z0_sq * z1_x_z2 * one_m_z0_sq) / (1.0 - z1)
-    ) * (dot_x21_x0c1p2 / x21_sq + dot_x21b_x0c1p2b / x21b_sq)
-    Y_d_inst = term1d + term2d + term3d
-
-    term1e = (z0_sq * z1_sq * z2**2) / one_m_z0_sq
-    term2e = (
-        (z0**3 * z1_sq * z2) / (1.0 - z0)
-    ) * (dot_x21_x0c1p2 / x21_sq + dot_x21b_x0c1p2b / x21b_sq)
-    term3e = -(
-        (z0 * z1_sq * z2 * one_m_z1_sq) / (1.0 - z0)
-    ) * (dot_x20_x0p2c1 / x20_sq + dot_x20b_x0p2c1b / x20b_sq)
-    Y_e_inst = term1e + term2e + term3e
-
-    term1bc_pref = -z0_x_z1 * (z0*(1.0 - z1) + z1*(1.0 - z0)) * (z0*(1.0 - z0) + z1*(1.0 - z1))
-    term1bc_prods = (
-        dot_x0c1p2_x0p2c1b * dot_x21_x20b / (x21_sq * x20b_sq) +
-        dot_x0p2c1_x0c1p2b * dot_x20_x21b / (x20_sq * x21b_sq)
-    )
-    term2bc_pref = z0_x_z1 * z2 * (z0 - z1)**2
-    term2bc_prod1 = (
-        (dot_x20_x0p2c1 * dot_x21b_x0c1p2b - dot_x20_x0c1p2b * dot_x21b_x0p2c1) /
-        (x20_sq * x21b_sq)
-    )
-    term2bc_prod2 = (
-        (dot_x21_x0c1p2 * dot_x20b_x0p2c1b - dot_x21_x0p2c1b * dot_x20b_x0c1p2) /
-        (x21_sq * x20b_sq)
-    )
-    Y_bc_interf = term1bc_pref * term1bc_prods + term2bc_pref * (term2bc_prod1 + term2bc_prod2)
-
-    sum_Y_terms = Y_b_reg + Y_c_reg + Y_d_inst + Y_e_inst + Y_bc_interf
-    kin_factor = z0 * z1 * sum_Y_terms
 
     return X012, X012b, Y012, kin_factor
-
-# --- VECTORIZED GNLOT ---
-def GNLOT(Q, Mx, z0, z1, z2, x20, th20, x20b, th20b, x21, th21, x21b, th21b):
-
+    
+def GNLOL(Q, Mx, z0, z1, z2, x20, th20, x20b, th20b, x21, th21, x21b, th21b):
+    
     # All non-Bessel coordinate and kinematic calculations in ONE fused XLA block
-    X012, X012b, Y012, kin_factor = calculate_GNLOT_terms(z0, z1, z2, x20, th20, x20b, th20b, x21, th21, x21b, th21b)
+    X012, X012b, Y012, kin_factor = calculate_GNLOL_terms(z0, z1, z2, x20, th20, x20b, th20b, x21, th21, x21b, th21b)
 
     # Bessel calculation: Mx (1, M) * Y012 (N, 1) -> (N, M)
-    # bessel_k1(Q * X012) -> (N, 1)
-    res_bessel = (
-        bessel_k1_xla(Q * X012) * bessel_k1_xla(Q * X012b) * (1.0 / (X012 * X012b)) * 
-    (1.0 / Y012) * bessel_j1_xla(Mx * Y012)
-    )
-    
+    # bessel_k0(Q * X012) -> (N, 1)
+    res_bessel = bessel_k0_xla(Q * X012) * bessel_k0_xla(Q * X012b) * (1.0 / Y012) * bessel_j1_xla(Mx * Y012)
+
     return res_bessel * kin_factor # Shape: (N, M)
 
 
@@ -387,18 +352,42 @@ def integrand(xx, tfgrid, Csq, x_ref_min, x_ref_max, Mx, Q=2.0, beta=0.1, xpom=0
     )
 
     (s012, s012b) = both_S012s(tfgrid, x_ref_min, x_ref_max, Yqqg, x01, x20, th20, x21, th21, x01b, x20b, th20b, x21b, th21b)
-
-    #tf.print(s012b_ref - s012b_new)
-
-    term2 = GNLOT(Q, Mx, z0, z1, z2, x20, th20, x20b, th20b, x21, th21, x21b, th21b)
+    
+    # Main calculation
+    term2 = GNLOL(Q, Mx, z0, z1, z2, x20, th20, x20b, th20b, x21, th21, x21b, th21b)
     term3 = (1.0 - s012)
     term4 = (1.0 - s012b)
 
     return term1 * (term2 * (term3 * term4)) # Result: (N, M)
 
+# --- VEGAS grid training ---
+class VegasFlowFastTrain(VegasFlow):
+    """VegasFlow with an O(N) fill of the grid-training histogram.
+
+    VegasFlow sums (w f)^2 per bin with a dense (bins x N) one-hot mask for every dimension
+    (vegasflow.utils.consume_array_into_indices). Here all dimensions are filled with one
+    segment sum over flattened (dimension, bin) indices. Same histogram up to summation order."""
+    def _can_run_vectorial(self, expected_shape):
+        # VegasFlow accepts vectorial (batched beta) integrands only when the class is named exactly
+        # "VegasFlow". The histogram fill below receives only the main dimension, as in VegasFlow.
+        super()._can_run_vectorial(expected_shape) # keeps the main_dimension range check
+        return True
+
+    def _importance_sampling_array_filling(self, results2, indices):
+        if not self.train:
+            return []
+
+        n_bins = self.grid_bins - 1
+        # indices: (N, n_dim) bin of each event in each dimension -> segment id dim*n_bins + bin
+        segment_ids = indices + n_bins * tf.range(self.n_dim, dtype=indices.dtype)
+        data = tf.broadcast_to(tf.expand_dims(results2, -1), tf.shape(indices))
+        arr_res2 = tf.math.unsorted_segment_sum(data, segment_ids, self.n_dim * n_bins)
+
+        return tf.reshape(arr_res2, (self.n_dim, n_bins))
+
 # --- VERIFICATION BLOCK ---
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Trip-trip (T) contribution from dipole grid.")
+    parser = argparse.ArgumentParser(description="Trip-trip (L) contribution from dipole grid.")
     # Replace the Q and beta arguments in your current block:
     parser.add_argument("--Q", type=float, default=3.1622, help="Q - Photon virtuality")
     parser.add_argument("--beta", type=float, nargs='+', default=[0.5], help="beta - DIS variable - supply one or more values")
@@ -409,11 +398,7 @@ if __name__ == "__main__":
     parser.add_argument("--neval", type=float, default=1e6, help="Number of integration points")
     parser.add_argument("--input_grid_path", type=str, default="", help="Path to the pre-trained VEGAS grid (if available)")
     parser.add_argument("--save_dir", type=str, default="", help="Saves result to specified folder")
-    parser.add_argument("--events_limit", type=float, default=1e6, help="Tensorflow batch size for VegasFlow")
-    parser.add_argument("--seed", type=int, default=None, help="Random seed (default: unseeded, a fresh random stream each run)")
-    parser.add_argument("--integration_grid", action="store_true", help="Save the trained VEGAS grid (JSON) to save_dir; not saved otherwise")
     args = vars(parser.parse_args())
-    args["events_limit"] = int(args["events_limit"])
 
     # --- Provenance info ---
     args["script_file"] = os.path.basename(__file__)
@@ -475,9 +460,7 @@ if __name__ == "__main__":
     CF = 4.0/3.0
     sum_ef_squared = 2.0/3.0 # 4/9 + 1/9 + 1/9 = 2/3
     # Note that prefactor does not contain transverse profile (squared) integral
-    prefactorsT = Nc*CF*Qval**7 * np.sqrt(1.0/betavals - 1.0)/((2*np.pi)**5 * betavals*2*np.pi**2) * sum_ef_squared
-    
-    
+    prefactorsL = 8*Nc*CF*Qval**7 * np.sqrt(1.0/betavals - 1.0)/((2*np.pi)**7 * betavals) * sum_ef_squared
     
     th20=tf.constant(0.0, dtype=tf.float64)
 
@@ -489,10 +472,8 @@ if __name__ == "__main__":
     logrmax = np.log(rmax)
     x_ref_min = tf.constant(np.array([ymin, logrmin]))
     x_ref_max = tf.constant(np.array([ymax, logrmax]))
-
-    numpy_grid = GetYRgrid(dipole_path)
-    tfgrid = tf.constant(numpy_grid, dtype = tf.float64)
-    #print(f"Type of tfgrid: {type(tfgrid)}")
+    
+    tfgrid = GetYRgrid(dipole_path)
     
     n_dim = 9
     
@@ -500,7 +481,7 @@ if __name__ == "__main__":
 
     main_dimension = 0 #main dimension not provided as argument. Supply beta value for main dimension first
 
-    vegas_instance = VegasFlowImproved(n_dim, n_events, events_limit=args["events_limit"], seed=args["seed"], xmin=[0, 0, 0, 0, 0, 0, 0, 0, 0], xmax=[1, 1, xmax, xmax, 2.0*np.pi, xmax, 2.0*np.pi, xmax, 2.0*np.pi],main_dimension = main_dimension)
+    vegas_instance = VegasFlowFastTrain(n_dim, n_events, xmin=[0, 0, 0, 0, 0, 0, 0, 0, 0], xmax=[1, 1, xmax, xmax, 2.0*np.pi, xmax, 2.0*np.pi, xmax, 2.0*np.pi],main_dimension = main_dimension)
 
     integrand_vegasflow = lambda xx: integrand(xx,tfgrid,Csq,x_ref_min,x_ref_max,Mx_const,Q=Q,beta=beta_list,xpom=xpom)
     
@@ -513,11 +494,13 @@ if __name__ == "__main__":
     print(f"VEGAS MC, npoints={n_events}:")
     start = time.time()
     result = vegas_instance.run_integration(n_iter)
-    result_final = list((list([prefactorsT[n]*elem for n, elem in enumerate(result[i])]) for i in [0,1]))
+    result_final = list((list([prefactorsL[n]*elem for n, elem in enumerate(result[i])]) for i in [0,1]))
     end = time.time()
     print(f"Result of VEGAS: {result_final}")
     print(f"Vegas took: time (s): {end-start}")
 
+    vegas_instance.freeze_grid()
+    
     for n, beta in enumerate(betavals):
         # --- Organize data into dictionaries ---
         # Input parameters
@@ -532,7 +515,7 @@ if __name__ == "__main__":
             params["batched"] = True
         
         # Metadata
-        meta_keys = ["save_dir", "input_grid_path", "events_limit", "seed"]
+        meta_keys = ["save_dir", "input_grid_path"]
         meta = {k: args[k] for k in meta_keys}
         
         
@@ -546,6 +529,8 @@ if __name__ == "__main__":
     
         result_path = os.path.join(save_dir, result_filename)
         json_file_path = os.path.join(save_dir, json_filename)
+        
+        
     
         chisqdof=-1.0
         if save_dir != "":
@@ -555,10 +540,9 @@ if __name__ == "__main__":
                 f.write(f"({result_final[0]}, {result_final[1]}, {chisqdof})")
             
             trained_grid_filename = (f"grid_niter_{n_iter}_neval_{n_events}_x_{xpomval}_Q_{Qval}_beta_{betavals[main_dimension]}.json")
-            if args["integration_grid"]:
-                meta["trained_grid"] = trained_grid_filename
+            meta["trained_grid"] = trained_grid_filename
             trained_grid_path = os.path.join(save_dir, trained_grid_filename)
-            if n == 0 and args["integration_grid"]:
+            if n == 0:
                 vegas_instance.save_grid(trained_grid_path)
         
         # --- Save JSON Payload ---

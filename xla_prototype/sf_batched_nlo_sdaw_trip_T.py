@@ -407,6 +407,7 @@ if __name__ == "__main__":
     parser.add_argument("--save_dir", type=str, default="", help="Saves result to specified folder")
     parser.add_argument("--events_limit", type=float, default=1e6, help="Tensorflow batch size for VegasFlow")
     parser.add_argument("--seed", type=int, default=None, help="Random seed (default: unseeded, a fresh random stream each run)")
+    parser.add_argument("--integration_grid", action="store_true", help="Save the trained VEGAS grid (JSON) to save_dir; not saved otherwise")
     args = vars(parser.parse_args())
     args["events_limit"] = int(args["events_limit"])
 
@@ -513,8 +514,6 @@ if __name__ == "__main__":
     print(f"Result of VEGAS: {result_final}")
     print(f"Vegas took: time (s): {end-start}")
 
-    vegas_instance.freeze_grid()
-    
     for n, beta in enumerate(betavals):
         # --- Organize data into dictionaries ---
         # Input parameters
@@ -552,9 +551,10 @@ if __name__ == "__main__":
                 f.write(f"({result_final[0]}, {result_final[1]}, {chisqdof})")
             
             trained_grid_filename = (f"grid_niter_{n_iter}_neval_{n_events}_x_{xpomval}_Q_{Qval}_beta_{betavals[main_dimension]}.json")
-            meta["trained_grid"] = trained_grid_filename
+            if args["integration_grid"]:
+                meta["trained_grid"] = trained_grid_filename
             trained_grid_path = os.path.join(save_dir, trained_grid_filename)
-            if n == 0:
+            if n == 0 and args["integration_grid"]:
                 vegas_instance.save_grid(trained_grid_path)
         
         # --- Save JSON Payload ---
